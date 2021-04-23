@@ -175,8 +175,34 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 }
 
 func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User) {
-	settings := wd.r.StringMap(questionskey)
 	chat := wd.GetMessage(update).Chat
+
+	// когда добавили бота в чат, проверяем является ли он админом, если нет, сообщаем что нужно добавить в группу
+	me, _ := wd.bot.GetMe()
+	if user.ID == me.ID {
+		if !wd.MeIsAdmin(chat.ChatConfig()) {
+			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", chat.ID, Buttons{})
+
+			// отслеживаем статус, когда сделают администратором удаляем сообщение
+			go func() {
+				tick := time.NewTicker(time.Second)
+				for range tick.C {
+					if wd.MeIsAdmin(chat.ChatConfig()) {
+						wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+							ChatID:    chat.ID,
+							MessageID: message.MessageID})
+
+						tick.Stop()
+					}
+				}
+			}()
+
+			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chat.ID, 10))
+		}
+		return
+	}
+
+	settings := wd.r.StringMap(questionskey)
 	key := strconv.FormatInt(chat.ID, 10)
 	confStr, ok := settings[key]
 	if !ok {
@@ -226,32 +252,6 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 		handler: &handlercancel,
 		timer:   conf.Timeout,
 	})
-
-	// когда добавили бота в чат, проверяем является ли он админом, если нет, сообщаем что нужно добавить в группу
-	me, _ := wd.bot.GetMe()
-
-	if user.ID == me.ID {
-		if !wd.MeIsAdmin(chat.ChatConfig()) {
-			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", chat.ID, Buttons{})
-
-			// отслеживаем статус, когда сделают администратором удаляем сообщение
-			go func() {
-				tick := time.NewTicker(time.Second)
-				for range tick.C {
-					if wd.MeIsAdmin(chat.ChatConfig()) {
-						wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
-							ChatID:    chat.ID,
-							MessageID: message.MessageID})
-
-						tick.Stop()
-					}
-				}
-			}()
-
-			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chat.ID, 10))
-		}
-		return
-	}
 
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
 		"\n%s", user.FirstName, user.LastName, conf.Question)
