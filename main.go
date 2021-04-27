@@ -229,6 +229,9 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 					deleteMessage()
 				} else {
 					deleteMessage()
+					wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+						ChatID:    chat.ID,
+						MessageID: parentMsgID})
 					wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
 						ChatMemberConfig: tgbotapi.ChatMemberConfig{
 							ChatID:             chat.ID,
@@ -262,15 +265,15 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 			ChatID:    wd.GetMessage(update).Chat.ID,
 			MessageID: message.MessageID})
-		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
-			ChatID:    chat.ID,
-			MessageID: parentMsgID})
 	}
 
 	handlercancel = func(update *tgbotapi.Update) (result bool) {
 		from := wd.GetUser(update)
 		if result = update == nil || from.ID == user.ID; result {
 			deleteMessage()
+			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+				ChatID:    chat.ID,
+				MessageID: parentMsgID})
 			wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
 				ChatMemberConfig: tgbotapi.ChatMemberConfig{
 					ChatID:             chat.ID,
