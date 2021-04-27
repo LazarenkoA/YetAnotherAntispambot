@@ -176,6 +176,7 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 
 func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User) {
 	chat := wd.GetMessage(update).Chat
+	parentMsgID := wd.GetMessage(update).MessageID
 
 	// когда добавили бота в чат, проверяем является ли он админом, если нет, сообщаем что нужно добавить в группу
 	me, _ := wd.bot.GetMe()
@@ -261,14 +262,15 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 			ChatID:    wd.GetMessage(update).Chat.ID,
 			MessageID: message.MessageID})
+		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+			ChatID:    chat.ID,
+			MessageID: parentMsgID})
 	}
 
 	handlercancel = func(update *tgbotapi.Update) (result bool) {
 		from := wd.GetUser(update)
 		if result = update == nil || from.ID == user.ID; result {
-			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
-				ChatID:    chat.ID,
-				MessageID: message.MessageID})
+			deleteMessage()
 			wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
 				ChatMemberConfig: tgbotapi.ChatMemberConfig{
 					ChatID:             chat.ID,
