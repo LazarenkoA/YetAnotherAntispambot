@@ -68,6 +68,13 @@ func (this *Telega) SendMsg(msg string, chatID int64, buttons Buttons) (tgbotapi
 	return this.createButtonsAndSend(&newmsg, buttons)
 }
 
+func (this *Telega) ReplyMsg(msg string, chatID int64, buttons Buttons, parrentMessageID int) (tgbotapi.Message, error) {
+	newmsg := tgbotapi.NewMessage(chatID, msg)
+	newmsg.ReplyToMessageID = parrentMessageID
+	newmsg.ParseMode = "HTML"
+	return this.createButtonsAndSend(&newmsg, buttons)
+}
+
 func (this *Telega) SendFile(chatID int64, filepath string) error {
 	msg := tgbotapi.NewDocumentUpload(chatID, filepath)
 	_, err := this.bot.Send(msg)

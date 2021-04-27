@@ -230,7 +230,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 					deleteMessage()
 					wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
 						ChatMemberConfig: tgbotapi.ChatMemberConfig{
-							ChatID:             wd.GetMessage(*update).Chat.ID,
+							ChatID:             chat.ID,
 							SuperGroupUsername: "",
 							ChannelUsername:    "",
 							UserID:             user.ID,
@@ -255,7 +255,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
 		"\n%s", user.FirstName, user.LastName, conf.Question)
-	message, _ := wd.SendMsg(txt, chat.ID, b)
+	message, _ := wd.ReplyMsg(txt, chat.ID, b, wd.GetMessage(update).MessageID)
 
 	deleteMessage = func() {
 		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
