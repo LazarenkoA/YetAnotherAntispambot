@@ -1,0 +1,9 @@
+timeout: 60 # время на ответ в секундах
+question:
+  txt: "Кто это?"
+  img: "https://img1.goodfon.ru/wallpaper/nbig/c/60/lezhit-krovat-kot-oboi.jpg"
+answers:
+  - txt: "Кот"
+    correct: true
+  - txt: "Пес"
+  - txt: "Слон"

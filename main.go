@@ -57,17 +57,17 @@ func main() {
 		command := wd.GetMessage(update).Command()
 		switch command {
 		case "start":
-			wd.SendMsg("👋🏻", chatID, Buttons{})
+			wd.SendMsg("👋🏻", "", chatID, Buttons{})
 		case "configuration":
 			key := strconv.Itoa(wd.GetMessage(update).From.ID)
 			if wd.r.KeyExists(key) {
 				configuration(wd, update, chatID)
 			} else {
-				wd.SendMsg("Для вас не найден активный чат", chatID, Buttons{})
+				wd.SendMsg("Для вас не найден активный чат", "", chatID, Buttons{})
 			}
 		default:
 			if command != "" {
-				wd.SendMsg("Команда "+command+" не поддерживается", chatID, Buttons{})
+				wd.SendMsg("Команда "+command+" не поддерживается", "",  chatID, Buttons{})
 				continue
 			} else {
 				key := strconv.FormatInt(chatID, 10)
@@ -109,7 +109,7 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 		})
 	}
 
-	msg, _ := wd.SendMsg("выберите чат", chatID, buttons)
+	msg, _ := wd.SendMsg("выберите чат", "", chatID, buttons)
 	for _, b := range buttons {
 		chat := b.caption
 		download := func(*tgbotapi.Update) bool { return true }
@@ -182,7 +182,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 	me, _ := wd.bot.GetMe()
 	if user.ID == me.ID {
 		if !wd.MeIsAdmin(chat.ChatConfig()) {
-			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", chat.ID, Buttons{})
+			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", "", chat.ID, Buttons{})
 
 			// отслеживаем статус, когда сделают администратором удаляем сообщение
 			go func() {
@@ -258,8 +258,8 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 	})
 
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
-		"\n%s", user.FirstName, user.LastName, conf.Question)
-	message, _ := wd.ReplyMsg(txt, chat.ID, b, wd.GetMessage(update).MessageID)
+		"\n%s", user.FirstName, user.LastName, conf.Question.Txt)
+	message, _ := wd.ReplyMsg(txt, conf.Question.Img, chat.ID, b, wd.GetMessage(update).MessageID)
 
 	deleteMessage = func() {
 		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
@@ -287,3 +287,4 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 		return result
 	}
 }
+

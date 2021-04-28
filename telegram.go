@@ -62,17 +62,44 @@ func (this *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
 	return this.bot.ListenForWebhook("/"), nil
 }
 
-func (this *Telega) SendMsg(msg string, chatID int64, buttons Buttons) (tgbotapi.Message, error) {
-	newmsg := tgbotapi.NewMessage(chatID, msg)
-	newmsg.ParseMode = "HTML"
-	return this.createButtonsAndSend(&newmsg, buttons)
+func (this *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (tgbotapi.Message, error) {
+	if imgURL != "" {
+		if path, err := downloadFile(imgURL); err == nil {
+			defer os.RemoveAll(path)
+
+			newmsg := tgbotapi.NewPhotoUpload(chatID, path)
+			newmsg.Caption = msg
+			newmsg.ParseMode = "HTML"
+			return this.createButtonsAndSend(&newmsg, buttons)
+		} else {
+			return tgbotapi.Message{}, err
+		}
+	} else {
+		newmsg := tgbotapi.NewMessage(chatID, msg)
+		newmsg.ParseMode = "HTML"
+		return this.createButtonsAndSend(&newmsg, buttons)
+	}
 }
 
-func (this *Telega) ReplyMsg(msg string, chatID int64, buttons Buttons, parrentMessageID int) (tgbotapi.Message, error) {
-	newmsg := tgbotapi.NewMessage(chatID, msg)
-	newmsg.ReplyToMessageID = parrentMessageID
-	newmsg.ParseMode = "HTML"
-	return this.createButtonsAndSend(&newmsg, buttons)
+func (this *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (tgbotapi.Message, error) {
+	if imgURL != "" {
+		if path, err := downloadFile(imgURL); err == nil {
+			defer os.RemoveAll(path)
+
+			newmsg := tgbotapi.NewPhotoUpload(chatID, path)
+			newmsg.ReplyToMessageID = parrentMessageID
+			newmsg.Caption = msg
+			newmsg.ParseMode = "HTML"
+			return this.createButtonsAndSend(&newmsg, buttons)
+		} else {
+			return tgbotapi.Message{}, err
+		}
+	} else {
+		newmsg := tgbotapi.NewMessage(chatID, msg)
+		newmsg.ReplyToMessageID = parrentMessageID
+		newmsg.ParseMode = "HTML"
+		return this.createButtonsAndSend(&newmsg, buttons)
+	}
 }
 
 func (this *Telega) SendFile(chatID int64, filepath string) error {
@@ -83,6 +110,10 @@ func (this *Telega) SendFile(chatID int64, filepath string) error {
 
 func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (tgbotapi.Message, error) {
 	cxt, cancel := context.WithCancel(context.Background())
+
+	//if _, ok := msg.(tgbotapi.Fileable); ok {
+	//	fmt.Println(1)
+	//}
 
 	buttons.createButtons(msg, this.callback, cancel, 3)
 
@@ -147,9 +178,19 @@ B:
 				}
 			}
 
-			editmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, msg.Text)
-			editmsg.ParseMode = "HTML"
-			buttons.createButtons(&editmsg, this.callback, cancel, 3)
+
+			var editmsg tgbotapi.Chattable
+			if msg.Caption != "" {
+				teditmsg := tgbotapi.NewEditMessageCaption(msg.Chat.ID, msg.MessageID, msg.Caption)
+				teditmsg.ParseMode = "HTML"
+				editmsg = &teditmsg
+			} else {
+				teditmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, msg.Text)
+				teditmsg.ParseMode = "HTML"
+				editmsg = &teditmsg
+			}
+
+			buttons.createButtons(editmsg, this.callback, cancel, 3)
 			this.bot.Send(editmsg)
 
 			if button != nil {
@@ -255,8 +296,12 @@ func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]fu
 	switch msg.(type) {
 	case *tgbotapi.EditMessageTextConfig:
 		msg.(*tgbotapi.EditMessageTextConfig).ReplyMarkup = &keyboard
+	case *tgbotapi.EditMessageCaptionConfig:
+		msg.(*tgbotapi.EditMessageCaptionConfig).ReplyMarkup = &keyboard
 	case *tgbotapi.MessageConfig:
 		msg.(*tgbotapi.MessageConfig).ReplyMarkup = &keyboard
+	case *tgbotapi.PhotoConfig:
+		msg.(*tgbotapi.PhotoConfig).ReplyMarkup = &keyboard
 	}
 
 	for _, item := range this {
@@ -397,4 +442,18 @@ func getngrokWebhookURL() string {
 	case r := <-result:
 		return r
 	}
+}
+
+func downloadFile(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	f, err := ioutil.TempFile("", "*.jpg")
+	_, err = io.Copy(f, resp.Body)
+	f.Close()
+
+	return f.Name(), err
 }

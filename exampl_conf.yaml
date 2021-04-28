@@ -1,6 +1,7 @@
 timeout: 60 # время на ответ в секундах
-question: 1 + 1 = ?
+question:
+  txt: "1 + 1 = ?"
 answers:
-  - txt: 2
+  - txt: "2"
     correct: true
-  - txt: 3
+  - txt: "3"

@@ -10,11 +10,16 @@ type answer struct {
 	Correct bool   `yaml:"correct"`
 }
 
+type question struct {
+	Txt string `yaml:"txt"`
+	Img string `yaml:"img"`
+}
+
 type Conf struct {
 	// Обратный отчет в секундах
 	Timeout int `yaml:"timeout"`
 
-	Question string    `yaml:"question"`
+	Question question  `yaml:"question"`
 	Answers  []*answer `yaml:"answers"`
 }
 
