@@ -1,0 +1,11 @@
+timeout: 60 # время на ответ в секундах
+question:
+  txt: "Что вы видите на картинке?"
+  img: "https://i.imgur.com/UUMAx2Zm.jpg"
+answers:
+  - txt: "Бабочку"
+    correct: true
+  - txt: "Цветы"
+    correct: true
+  - txt: "Зайду потом"
+    correct: true
