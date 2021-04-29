@@ -212,7 +212,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 
 			strChatID := strconv.FormatInt(chat.ID, 10)
 			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strChatID)
-			wd.r.Set(strChatID, chat.UserName, -1)
+			wd.r.Set(strChatID, chat.Title, -1)
 		}
 		return
 	}
