@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+type wrapper struct {
+	settings map[string]string
+	err      error
+}
+
 var (
 	BotToken   = os.Getenv("BotToken")
 	WebhookURL = os.Getenv("WebhookURL")
@@ -67,7 +72,7 @@ func main() {
 			}
 		default:
 			if command != "" {
-				wd.SendMsg("Команда "+command+" не поддерживается", "",  chatID, Buttons{})
+				wd.SendMsg("Команда "+command+" не поддерживается", "", chatID, Buttons{})
 				continue
 			} else {
 				key := strconv.FormatInt(chatID, 10)
@@ -103,15 +108,21 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 
 	for _, chat := range chats {
 		handler := func(*tgbotapi.Update) bool { return true }
+
+		caption, err := wd.r.Get(chat)
+		if err != nil || caption == "" {
+			caption = chat
+		}
 		buttons = append(buttons, &Button{
-			caption: chat,
+			caption: caption,
 			handler: &handler,
+			ID:      chat,
 		})
 	}
 
 	msg, _ := wd.SendMsg("выберите чат", "", chatID, buttons)
 	for _, b := range buttons {
-		chat := b.caption
+		chat := b.ID
 		download := func(*tgbotapi.Update) bool { return true }
 
 		*b.handler = func(*tgbotapi.Update) bool {
@@ -141,7 +152,8 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 					return false
 				}
 				if confdata, err := wd.ReadFile(upd.Message); err == nil {
-					settings := wd.r.StringMap(questionskey)
+					settings := wrap(wd.r.StringMap(questionskey)).result(wd, chatID)
+
 					settings[chat] = confdata
 					wd.r.SetMap(questionskey, settings)
 
@@ -157,7 +169,7 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 }
 
 func getSettings(wd *Telega, key string, chatID int64) bool {
-	settings := wd.r.StringMap(questionskey)
+	settings := wrap(wd.r.StringMap(questionskey)).result(wd, chatID)
 	if s, ok := settings[key]; ok {
 		if f, err := ioutil.TempFile("", "*.yaml"); err == nil {
 			defer os.RemoveAll(f.Name())
@@ -198,12 +210,14 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 				}
 			}()
 
-			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chat.ID, 10))
+			strChatID := strconv.FormatInt(chat.ID, 10)
+			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strChatID)
+			wd.r.Set(strChatID, chat.UserName, -1)
 		}
 		return
 	}
 
-	settings := wd.r.StringMap(questionskey)
+	settings := wrap(wd.r.StringMap(questionskey)).result(wd, chat.ID)
 	key := strconv.FormatInt(chat.ID, 10)
 	confStr, ok := settings[key]
 	if !ok {
@@ -251,10 +265,19 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 			handler: &handlers[len(handlers)-1],
 		})
 	}
+
+	caption := "Не знаю"
+	timeout := 60
+	if conf.KickCaption != "" {
+		caption = conf.KickCaption
+	}
+	if conf.Timeout > 0 {
+		timeout = conf.Timeout
+	}
 	b = append(b, &Button{
-		caption: "Не знаю",
+		caption: caption,
 		handler: &handlercancel,
-		timer:   conf.Timeout,
+		timer:   timeout,
 	})
 
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
@@ -288,3 +311,18 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 	}
 }
 
+func wrap(settings map[string]string, err error) *wrapper {
+	return &wrapper{
+		settings: settings,
+		err:      err,
+	}
+}
+
+func (w *wrapper) result(wd *Telega, chatID int64) map[string]string {
+	if w.err == nil {
+		return w.settings
+	} else {
+		wd.SendMsg(fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", w.err), "", chatID, Buttons{})
+		return map[string]string{}
+	}
+}

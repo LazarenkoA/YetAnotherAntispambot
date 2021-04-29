@@ -141,12 +141,12 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 	}
 }
 
-func (R *Redis) StringMap(key string) map[string]string {
+func (R *Redis) StringMap(key string) (map[string]string, error) {
 	value, err := redis.StringMap(R.pool.Get().Do("HGETALL", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении StringMap")
 	}
-	return value
+	return value, err
 }
 
 // Начало транзакции

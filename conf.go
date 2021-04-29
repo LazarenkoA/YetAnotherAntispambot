@@ -17,7 +17,8 @@ type question struct {
 
 type Conf struct {
 	// Обратный отчет в секундах
-	Timeout int `yaml:"timeout"`
+	Timeout     int    `yaml:"timeout"`
+	KickCaption string `yaml:"kickCaption"`
 
 	Question question  `yaml:"question"`
 	Answers  []*answer `yaml:"answers"`
