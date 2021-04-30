@@ -186,13 +186,13 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 	return true
 }
 
-func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User) {
+func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbotapi.User) {
 	chat := wd.GetMessage(update).Chat
 	parentMsgID := wd.GetMessage(update).MessageID
 
 	// когда добавили бота в чат, проверяем является ли он админом, если нет, сообщаем что нужно добавить в группу
 	me, _ := wd.bot.GetMe()
-	if user.ID == me.ID {
+	if appendedUser.ID == me.ID {
 		if !wd.MeIsAdmin(chat.ChatConfig()) {
 			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", "", chat.ID, Buttons{})
 
@@ -238,7 +238,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 		a := ans // для замыкания
 		handlers = append(handlers, func(update *tgbotapi.Update) (result bool) {
 			from := wd.GetUser(update)
-			if result = from.ID == user.ID; result {
+			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
 				if a.Correct {
 					deleteMessage()
 				} else {
@@ -251,7 +251,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 							ChatID:             chat.ID,
 							SuperGroupUsername: "",
 							ChannelUsername:    "",
-							UserID:             user.ID,
+							UserID:             appendedUser.ID,
 						},
 						UntilDate: 0,
 					})
@@ -281,7 +281,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 	})
 
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
-		"\n%s", user.FirstName, user.LastName, conf.Question.Txt)
+		"\n%s", appendedUser.FirstName, appendedUser.LastName, conf.Question.Txt)
 	message, _ := wd.ReplyMsg(txt, conf.Question.Img, chat.ID, b, wd.GetMessage(update).MessageID)
 
 	deleteMessage = func() {
@@ -292,7 +292,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 
 	handlercancel = func(update *tgbotapi.Update) (result bool) {
 		from := wd.GetUser(update)
-		if result = update == nil || from.ID == user.ID; result {
+		if result = update == nil || from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
 			deleteMessage()
 			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 				ChatID:    chat.ID,
@@ -302,7 +302,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, user tgbotapi.User
 					ChatID:             chat.ID,
 					SuperGroupUsername: "",
 					ChannelUsername:    "",
-					UserID:             user.ID,
+					UserID:             appendedUser.ID,
 				},
 				UntilDate: 0,
 			})

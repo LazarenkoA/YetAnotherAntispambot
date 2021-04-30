@@ -142,14 +142,18 @@ func (this *Telega) EditMsg(msg tgbotapi.Message, txt string, buttons Buttons) t
 }
 
 func (this *Telega) MeIsAdmin(chatConfig tgbotapi.ChatConfig) bool {
+	me, _ := this.bot.GetMe()
+	return this.UserIsAdmin(chatConfig, &me)
+}
+
+func (this *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, user *tgbotapi.User) bool {
 	admins, err := this.bot.GetChatAdministrators(chatConfig)
 	if err != nil || len(admins) == 0 {
 		return false
 	}
 
-	me, _ := this.bot.GetMe()
 	for _, a := range admins {
-		if a.IsAdministrator() && a.User.ID == me.ID {
+		if a.IsAdministrator() && a.User.ID == user.ID {
 			return true
 		}
 	}
