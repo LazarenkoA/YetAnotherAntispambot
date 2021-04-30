@@ -153,7 +153,7 @@ func (this *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, user *tgbotapi.U
 	}
 
 	for _, a := range admins {
-		if a.IsAdministrator() && a.User.ID == user.ID {
+		if (a.IsAdministrator() || a.IsCreator()) && a.User.ID == user.ID {
 			return true
 		}
 	}
@@ -181,7 +181,6 @@ B:
 					}
 				}
 			}
-
 
 			var editmsg tgbotapi.Chattable
 			if msg.Caption != "" {
