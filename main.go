@@ -56,8 +56,8 @@ func main() {
 
 		// обработка команд кнопок
 		if wd.CallbackQuery(update) {
-			continue
-		}
+			continue }
+			continue }
 
 		command := wd.GetMessage(update).Command()
 		switch command {
