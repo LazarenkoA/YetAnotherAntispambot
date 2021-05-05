@@ -290,6 +290,35 @@ func (this *Telega) ReadFile(message *tgbotapi.Message) (data string, err error)
 	return data, err
 }
 
+func (this *Telega) DisableSendMessages(chatID int64, user *tgbotapi.User) {
+	denied := false
+	this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
+		ChatMemberConfig: tgbotapi.ChatMemberConfig{
+			ChatID:             chatID,
+			SuperGroupUsername: "",
+			ChannelUsername:    "",
+			UserID:             user.ID,
+		},
+		CanSendMessages: &denied,
+	})
+}
+
+func (this *Telega) EnableWritingMessages(chatID int64, user *tgbotapi.User) {
+	access := true
+	this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
+		ChatMemberConfig: tgbotapi.ChatMemberConfig{
+			ChatID:             chatID,
+			SuperGroupUsername: "",
+			ChannelUsername:    "",
+			UserID:             user.ID,
+		},
+		CanSendMessages:       &access,
+		CanSendMediaMessages:  &access,
+		CanSendOtherMessages:  &access,
+		CanAddWebPagePreviews: &access,
+	})
+}
+
 // Buttons
 
 func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update), cancel context.CancelFunc, countColum int) {
