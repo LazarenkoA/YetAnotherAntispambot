@@ -15,15 +15,20 @@ type wrapper struct {
 }
 
 var (
-	BotToken   = os.Getenv("BotToken")
-	WebhookURL = os.Getenv("WebhookURL")
-	port       = os.Getenv("PORT")
-	redisaddr  = os.Getenv("REDIS")
+	BotToken         = os.Getenv("BotToken")
+	WebhookURL       = os.Getenv("WebhookURL")
+	port             = os.Getenv("PORT")
+	redisaddr        = os.Getenv("REDIS")
+	notconfirmeduser map[int]bool
 )
 
 const (
 	questionskey = "questions"
 )
+
+func init() {
+	notconfirmeduser = map[int]bool{}
+}
 
 func main() {
 	if BotToken == "" {
@@ -57,6 +62,15 @@ func main() {
 		// обработка команд кнопок
 		if wd.CallbackQuery(update) {
 			continue
+		}
+
+		if from := wd.GetUser(&update); from != nil {
+			if ok, exists := notconfirmeduser[from.ID]; exists && ok {
+				wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+					ChatID:    msg.Chat.ID,
+					MessageID: msg.MessageID})
+				continue
+			}
 		}
 
 		command := wd.GetMessage(update).Command()
@@ -240,6 +254,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			from := wd.GetUser(update)
 			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
 				if a.Correct {
+					delete(notconfirmeduser, from.ID)
 					deleteMessage()
 				} else {
 					deleteMessage()
@@ -284,6 +299,10 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 		"\n%s", appendedUser.FirstName, appendedUser.LastName, conf.Question.Txt)
 	message, _ := wd.ReplyMsg(txt, conf.Question.Img, chat.ID, b, wd.GetMessage(update).MessageID)
 
+	// пока такой костылек, добавляем пользователя в буфер после подтверждения он из массива будет удален
+	// пока пользователь в буфере от него сообщения будут удаляться
+	notconfirmeduser[appendedUser.ID] = true
+
 	deleteMessage = func() {
 		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 			ChatID:    wd.GetMessage(update).Chat.ID,
@@ -297,14 +316,20 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 				ChatID:    chat.ID,
 				MessageID: parentMsgID})
-			wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
-				ChatMemberConfig: tgbotapi.ChatMemberConfig{
-					ChatID:             chat.ID,
-					SuperGroupUsername: "",
-					ChannelUsername:    "",
-					UserID:             appendedUser.ID,
-				},
-				UntilDate: 0,
+			//wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+			//	ChatMemberConfig: tgbotapi.ChatMemberConfig{
+			//		ChatID:             chat.ID,
+			//		SuperGroupUsername: "",
+			//		ChannelUsername:    "",
+			//		UserID:             appendedUser.ID,
+			//	},
+			//	UntilDate: 0,
+			//})
+			wd.bot.UnbanChatMember(tgbotapi.ChatMemberConfig{
+				ChatID:             chat.ID,
+				SuperGroupUsername: "",
+				ChannelUsername:    "",
+				UserID:             appendedUser.ID,
 			})
 		}
 		return result
