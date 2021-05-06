@@ -251,11 +251,14 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 					wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 						ChatID:    chat.ID,
 						MessageID: parentMsgID})
-					wd.bot.UnbanChatMember(tgbotapi.ChatMemberConfig{
-						ChatID:             chat.ID,
-						SuperGroupUsername: "",
-						ChannelUsername:    "",
-						UserID:             appendedUser.ID,
+					wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+						ChatMemberConfig: tgbotapi.ChatMemberConfig{
+							ChatID:             chat.ID,
+							SuperGroupUsername: "",
+							ChannelUsername:    "",
+							UserID:             appendedUser.ID,
+						},
+						UntilDate: 0,
 					})
 				}
 			}
@@ -301,20 +304,14 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 				ChatID:    chat.ID,
 				MessageID: parentMsgID})
-			//wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
-			//	ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			//		ChatID:             chat.ID,
-			//		SuperGroupUsername: "",
-			//		ChannelUsername:    "",
-			//		UserID:             appendedUser.ID,
-			//	},
-			//	UntilDate: 0,
-			//})
-			wd.bot.UnbanChatMember(tgbotapi.ChatMemberConfig{
-				ChatID:             chat.ID,
-				SuperGroupUsername: "",
-				ChannelUsername:    "",
-				UserID:             appendedUser.ID,
+			wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+				ChatMemberConfig: tgbotapi.ChatMemberConfig{
+					ChatID:             chat.ID,
+					SuperGroupUsername: "",
+					ChannelUsername:    "",
+					UserID:             appendedUser.ID,
+				},
+				UntilDate: 0,
 			})
 
 		}

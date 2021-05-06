@@ -35,6 +35,8 @@ func (R *Redis) initPool(stringConnect string) {
 }
 
 func (R *Redis) KeyExists(key string) bool {
+	defer R.pool.Close()
+
 	exists, err := redis.Bool(R.pool.Get().Do("EXISTS", key))
 	if err != nil {
 		fmt.Println("Redis. Ошибка при выполнении KeyExists")
@@ -44,6 +46,8 @@ func (R *Redis) KeyExists(key string) bool {
 }
 
 func (R *Redis) Keys() []string {
+	defer R.pool.Close()
+
 	keys, err := redis.Strings(R.pool.Get().Do("KEYS", "*"))
 	if err != nil && err != redis.ErrNil {
 		fmt.Printf("Redis. Ошибка при выполнении KEYS. %v\n", err)
@@ -53,6 +57,8 @@ func (R *Redis) Keys() []string {
 }
 
 func (R *Redis) Count(key string) int {
+	defer R.pool.Close()
+
 	count, err := redis.Int(R.pool.Get().Do("SCARD", key))
 	if err != nil {
 		fmt.Println("Redis. Ошибка при выполнении Count")
@@ -61,6 +67,8 @@ func (R *Redis) Count(key string) int {
 }
 
 func (R *Redis) Delete(key string) error {
+	defer R.pool.Close()
+
 	_, err := R.pool.Get().Do("DEL", key)
 	if err != nil {
 		fmt.Println("Redis. Ошибка при выполнении Delete")
@@ -71,6 +79,8 @@ func (R *Redis) Delete(key string) error {
 // Установка значения
 // ttl - через сколько будет очищено значение (минимальное значение 1 секунда)
 func (R *Redis) Set(key, value string, ttl time.Duration) error {
+	defer R.pool.Close()
+
 	param := []interface{}{key, value}
 	if ttl >= time.Second {
 		param = append(param, "EX", ttl.Seconds())
@@ -84,6 +94,8 @@ func (R *Redis) Set(key, value string, ttl time.Duration) error {
 }
 
 func (R *Redis) Get(key string) (string, error) {
+	defer R.pool.Close()
+
 	v, err := redis.String(R.pool.Get().Do("GET", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Printf("Redis. Ошибка при выполнении Get. %v\n", err)
@@ -92,6 +104,8 @@ func (R *Redis) Get(key string) (string, error) {
 }
 
 func (R *Redis) DeleteItems(key, value string) error {
+	defer R.pool.Close()
+
 	_, err := R.pool.Get().Do("SREM", key, value)
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении DeleteItems")
@@ -100,6 +114,8 @@ func (R *Redis) DeleteItems(key, value string) error {
 }
 
 func (R *Redis) Items(key string) []string {
+	defer R.pool.Close()
+
 	items, err := redis.Strings(R.pool.Get().Do("SMEMBERS", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении Items")
@@ -108,6 +124,8 @@ func (R *Redis) Items(key string) []string {
 }
 
 func (R *Redis) LPOP(key string) string {
+	defer R.pool.Close()
+
 	item, err := redis.String(R.pool.Get().Do("LPOP", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении LPOP")
@@ -116,6 +134,8 @@ func (R *Redis) LPOP(key string) string {
 }
 
 func (R *Redis) RPUSH(key, value string) error {
+	defer R.pool.Close()
+
 	_, err := R.pool.Get().Do("RPUSH", key, value)
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении RPUSH")
@@ -125,6 +145,8 @@ func (R *Redis) RPUSH(key, value string) error {
 
 // Добавляет в неупорядоченную коллекцию значение
 func (R *Redis) AppendItems(key, value string) {
+	defer R.pool.Close()
+
 	_, err := R.pool.Get().Do("SADD", key, value)
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении AppendItems")
@@ -132,6 +154,8 @@ func (R *Redis) AppendItems(key, value string) {
 }
 
 func (R *Redis) SetMap(key string, value map[string]string) {
+	defer R.pool.Close()
+
 	for k, v := range value {
 		_, err := R.pool.Get().Do("HSET", key, k, v)
 		if err != nil {
@@ -142,6 +166,8 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 }
 
 func (R *Redis) StringMap(key string) (map[string]string, error) {
+	defer R.pool.Close()
+
 	value, err := redis.StringMap(R.pool.Get().Do("HGETALL", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении StringMap")
@@ -151,15 +177,21 @@ func (R *Redis) StringMap(key string) (map[string]string, error) {
 
 // Начало транзакции
 func (R *Redis) Begin() {
+	defer R.pool.Close()
+
 	R.pool.Get().Do("MULTI")
 }
 
 // Фиксация транзакции
 func (R *Redis) Commit() {
+	defer R.pool.Close()
+
 	R.pool.Get().Do("EXEC")
 }
 
 // Откат транзакции
 func (R *Redis) Rollback() {
+	defer R.pool.Close()
+
 	R.pool.Get().Do("DISCARD")
 }
