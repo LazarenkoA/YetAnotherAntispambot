@@ -23,8 +23,13 @@ type Button struct {
 	caption string
 	handler *func(*tgbotapi.Update) bool
 	timer   int
-	ID      string
+
+	// время начала таймера
+	start time.Time
+	ID    string
 }
+
+const keyActiveMSG = "keyActiveMSG"
 
 type Buttons []*Button
 
@@ -162,23 +167,27 @@ func (this *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, user *tgbotapi.U
 }
 
 func (this *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context, cancel context.CancelFunc) {
-	tick := time.NewTicker(time.Second)
+	tick := time.NewTicker(this.getDelay())
 	defer func() {
 		tick.Stop()
 	}()
 
+	for i := 0; i < len(buttons); i++ {
+		if buttons[i].timer > 0 {
+			buttons[i].start = time.Now().Add(time.Second * time.Duration(buttons[i].timer))
+		}
+	}
+
 B:
 	for {
 		select {
-		case <-tick.C:
+		case <-cxt.Done():
+			break B
+		default:
 			var button *Button
 			for i := 0; i < len(buttons); i++ {
-				if buttons[i].timer > 0 {
-					buttons[i].timer--
-
-					if buttons[i].timer == 0 {
-						button = buttons[i]
-					}
+				if !buttons[i].start.IsZero() && buttons[i].start.Before(time.Now()) {
+					button = buttons[i]
 				}
 			}
 
@@ -204,8 +213,8 @@ B:
 				delete(this.callback, button.ID)
 				break B
 			}
-		case <-cxt.Done():
-			break B
+
+			<-tick.C
 		}
 	}
 }
@@ -352,8 +361,9 @@ func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]fu
 		}
 
 		caption := item.caption
-		if item.timer > 0 {
-			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", item.caption, (item.timer / 3600), (item.timer%3600)/60, (item.timer % 60))
+		if !item.start.IsZero() {
+			second := int(item.start.Sub(time.Now()).Seconds())
+			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", item.caption, second/3600, (second%3600)/60, second%60)
 		}
 
 		btn := tgbotapi.NewInlineKeyboardButtonData(caption, item.ID)
@@ -488,4 +498,22 @@ func downloadFile(url string) (string, error) {
 	f.Close()
 
 	return f.Name(), err
+}
+
+func (this *Telega) getDelay() (result time.Duration) {
+	result = time.Second
+
+	defer func() {
+		recover() // что б не прервалось, result у нас уже инициализирован дефолтным значением
+	}()
+
+	if items, err := this.r.Items(keyActiveMSG); err != nil {
+		return result
+	} else {
+		delay := len(items) / 25 // одновременных изменения не должны быть чаще 30 в сек, по этому задержку устанавливаем с учетом активных сообщений (25 эт с запасом)
+		if delay > 1 {
+			return time.Duration(delay)
+		}
+	}
+	return
 }

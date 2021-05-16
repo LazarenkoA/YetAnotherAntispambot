@@ -121,7 +121,7 @@ func main() {
 
 func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 	buttons := Buttons{}
-	chats := wd.r.Items(strconv.Itoa(wd.GetMessage(update).From.ID))
+	chats, _ := wd.r.Items(strconv.Itoa(wd.GetMessage(update).From.ID))
 	key := strconv.FormatInt(chatID, 10)
 
 	for _, chat := range chats {
@@ -275,6 +275,12 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 						UntilDate: 0,
 					})
 				}
+			} else {
+				wd.bot.AnswerCallbackQuery(tgbotapi.CallbackConfig{
+					CallbackQueryID: update.CallbackQuery.ID,
+					Text:            "Вопрос не для вас",
+					ShowAlert:       true,
+				})
 			}
 			return result
 		})
@@ -302,13 +308,15 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
 		"\n%s", appendedUser.FirstName, appendedUser.LastName, conf.Question.Txt)
 	message, _ := wd.ReplyMsg(txt, conf.Question.Img, chat.ID, b, wd.GetMessage(update).MessageID)
-
 	wd.DisableSendMessages(chat.ID, &appendedUser) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
+	wd.r.AppendItems(keyActiveMSG, strconv.Itoa(message.MessageID))
 
 	deleteMessage = func() {
-		wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+		if _, err := wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 			ChatID:    wd.GetMessage(update).Chat.ID,
-			MessageID: message.MessageID})
+			MessageID: message.MessageID}); err == nil {
+			wd.r.DeleteItems(keyActiveMSG, strconv.Itoa(message.MessageID))
+		}
 	}
 
 	handlercancel = func(update *tgbotapi.Update) (result bool) {

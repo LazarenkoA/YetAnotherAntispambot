@@ -99,12 +99,12 @@ func (R *Redis) DeleteItems(key, value string) error {
 	return err
 }
 
-func (R *Redis) Items(key string) []string {
+func (R *Redis) Items(key string) ([]string, error) {
 	items, err := redis.Strings(R.pool.Get().Do("SMEMBERS", key))
 	if err != nil && err != redis.ErrNil {
 		fmt.Println("Redis. Ошибка при выполнении Items")
 	}
-	return items
+	return items, err
 }
 
 func (R *Redis) LPOP(key string) string {
