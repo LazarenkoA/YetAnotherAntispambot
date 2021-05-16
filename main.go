@@ -66,13 +66,27 @@ func main() {
 		command := wd.GetMessage(update).Command()
 		switch command {
 		case "start":
-			wd.SendMsg("👋🏻", "", chatID, Buttons{})
+			txt := fmt.Sprintf("Привет %s %s\n"+
+				"Что бы начать пользоваться ботом нужно выполнить следующие действия:\n"+
+				"1. Добавить бота в нужную группу\n"+
+				"2. Выдать боту админские права\n"+
+				"3. Выполнить в боте команду /configuration, выбрать чат и загрузить (отправить файл) конфиг. "+
+				"Пример конфига можно скачать выполнив команду /exampleconf", msg.From.FirstName, msg.From.LastName)
+			wd.SendMsg(txt, "", chatID, Buttons{})
 		case "configuration":
 			key := strconv.Itoa(wd.GetMessage(update).From.ID)
 			if wd.r.KeyExists(key) {
 				configuration(wd, update, chatID)
 			} else {
-				wd.SendMsg("Для вас не найден активный чат", "", chatID, Buttons{})
+				wd.SendMsg("Для вас не найден активный чат, видимо вы не добавили бота в чат.", "", chatID, Buttons{})
+			}
+		case "exampleconf":
+			if f, err := ioutil.TempFile("", "*.yaml"); err == nil {
+				f.WriteString(confExample())
+				f.Close()
+
+				wd.SendFile(chatID, f.Name())
+				os.RemoveAll(f.Name())
 			}
 		default:
 			if command != "" {

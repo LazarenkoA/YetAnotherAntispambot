@@ -37,3 +37,17 @@ func LoadConf(conf []byte) (result *Conf, err error) {
 	err = yaml.Unmarshal(conf, &result)
 	return result, err
 }
+
+func confExample() string {
+	return `timeout: 60 # время на ответ в секундах, не обязательный параметр, по дефолту 60 секунд
+kickCaption: "Я пожалуй пойду" # Заголовок кнопки с обратным отсчетом, не обязательный параметр, по дефолту заголовок "не знаю"
+question:
+  txt: "Что вы видите на картинке?"
+  img: "https://i.imgur.com/UUMAx2Zm.jpg" # не обязательный параметр
+answers:
+  - txt: "Бабочку"
+    correct: true
+  - txt: "Цветы"
+  - txt: "Лицо"
+    correct: true`
+}
