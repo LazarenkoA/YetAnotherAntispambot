@@ -10,11 +10,13 @@ import (
 	uuid "github.com/nu7hatch/gouuid"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -301,7 +303,7 @@ func (this *Telega) ReadFile(message *tgbotapi.Message) (data string, err error)
 
 func (this *Telega) DisableSendMessages(chatID int64, user *tgbotapi.User) {
 	denied := false
-	this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
+	_, err := this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
 		ChatMemberConfig: tgbotapi.ChatMemberConfig{
 			ChatID:             chatID,
 			SuperGroupUsername: "",
@@ -310,6 +312,9 @@ func (this *Telega) DisableSendMessages(chatID int64, user *tgbotapi.User) {
 		},
 		CanSendMessages: &denied,
 	})
+	if err != nil {
+		log.Printf("При ограничении прав пользователя произошла ошибка: %v\n", err)
+	}
 }
 
 func (this *Telega) EnableWritingMessages(chatID int64, user *tgbotapi.User) {
@@ -328,21 +333,66 @@ func (this *Telega) EnableWritingMessages(chatID int64, user *tgbotapi.User) {
 	})
 }
 
+func (this *Telega) KickChatMember(user tgbotapi.User, config tgbotapi.KickChatMemberConfig) {
+	const key = "UsingOneTry"
+	go func() {
+		userName := ""
+		if user.UserName != "" {
+			userName = "@" + user.UserName
+		} else {
+			userName = fmt.Sprintf("%s %s", user.FirstName, user.LastName)
+		}
+
+		users, err := this.r.Items(key)
+		if this.secondAttempt(users, err, strconv.Itoa(user.ID)) {
+			this.bot.KickChatMember(config)
+			this.r.DeleteItems(key, strconv.Itoa(user.ID))
+			return
+		}
+
+		this.r.AppendItems(key, strconv.Itoa(user.ID))
+		msg, _ := this.SendMsg(fmt.Sprintf("%s, мне придется Вас удалить из чата, но у Вас будет еще одна попытка входа.", userName), "", config.ChatID, Buttons{})
+		time.Sleep(time.Second * 10)
+		this.bot.KickChatMember(config)
+		this.bot.UnbanChatMember(tgbotapi.ChatMemberConfig{
+			ChatID: config.ChatID,
+			UserID: user.ID,
+		})
+
+		this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+			ChatID:    config.ChatID,
+			MessageID: msg.MessageID})
+	}()
+}
+
+func (this *Telega) secondAttempt(users []string, err error, userID string) bool {
+	if err != nil {
+		return false
+	}
+	for _, item := range users {
+		if userID == item {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Buttons
 
 func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update), cancel context.CancelFunc, countColum int) {
 	keyboard := tgbotapi.InlineKeyboardMarkup{}
 	var Buttons = []tgbotapi.InlineKeyboardButton{}
 
-	switch msg.(type) {
+	switch v := msg.(type) {
 	case *tgbotapi.EditMessageTextConfig:
-		msg.(*tgbotapi.EditMessageTextConfig).ReplyMarkup = &keyboard
+		v.ReplyMarkup = &keyboard
 	case *tgbotapi.EditMessageCaptionConfig:
-		msg.(*tgbotapi.EditMessageCaptionConfig).ReplyMarkup = &keyboard
+		v.ReplyMarkup = &keyboard
 	case *tgbotapi.MessageConfig:
-		msg.(*tgbotapi.MessageConfig).ReplyMarkup = &keyboard
+		v.ReplyMarkup = &keyboard
 	case *tgbotapi.PhotoConfig:
-		msg.(*tgbotapi.PhotoConfig).ReplyMarkup = &keyboard
+		v.ReplyMarkup = &keyboard
 	}
 
 	for _, item := range this {

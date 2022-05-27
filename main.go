@@ -247,6 +247,8 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 		return
 	}
 
+	wd.DisableSendMessages(chat.ID, &appendedUser) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
+
 	handlers := []func(*tgbotapi.Update) bool{}
 	handlercancel := func(*tgbotapi.Update) bool { return true }
 	deleteMessage := func() {}
@@ -265,7 +267,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 					wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 						ChatID:    chat.ID,
 						MessageID: parentMsgID})
-					wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+					wd.KickChatMember(appendedUser, tgbotapi.KickChatMemberConfig{
 						ChatMemberConfig: tgbotapi.ChatMemberConfig{
 							ChatID:             chat.ID,
 							SuperGroupUsername: "",
@@ -308,7 +310,6 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос:"+
 		"\n%s", appendedUser.FirstName, appendedUser.LastName, conf.Question.Txt)
 	message, _ := wd.ReplyMsg(txt, conf.Question.Img, chat.ID, b, wd.GetMessage(update).MessageID)
-	wd.DisableSendMessages(chat.ID, &appendedUser) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 	wd.r.AppendItems(keyActiveMSG, strconv.Itoa(message.MessageID))
 
 	deleteMessage = func() {
@@ -326,7 +327,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 				ChatID:    chat.ID,
 				MessageID: parentMsgID})
-			wd.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+			wd.KickChatMember(appendedUser, tgbotapi.KickChatMemberConfig{
 				ChatMemberConfig: tgbotapi.ChatMemberConfig{
 					ChatID:             chat.ID,
 					SuperGroupUsername: "",
