@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	uuid "github.com/nu7hatch/gouuid"
 	"io"
 	"io/ioutil"
 	"log"
@@ -19,6 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	uuid "github.com/nu7hatch/gouuid"
 )
 
 type Button struct {
@@ -40,7 +41,7 @@ type Telega struct {
 	callback map[string]func(tgbotapi.Update)
 	hooks    map[string]func(tgbotapi.Update) bool
 	running  int32
-	r        *Redis
+	r        *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
 }
 
 func (this *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
@@ -49,7 +50,7 @@ func (this *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
 	this.r, _ = new(Redis).Create(redisaddr)
 
 	this.bot, err = tgbotapi.NewBotAPIWithClient(BotToken, new(http.Client))
-	//this.bot.Debug = true
+	// this.bot.Debug = true
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +117,11 @@ func (this *Telega) SendFile(chatID int64, filepath string) error {
 }
 
 func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (tgbotapi.Message, error) {
-	cxt, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 
-	//if _, ok := msg.(tgbotapi.Fileable); ok {
+	// if _, ok := msg.(tgbotapi.Fileable); ok {
 	//	fmt.Println(1)
-	//}
+	// }
 
 	buttons.createButtons(msg, this.callback, cancel, 3)
 
@@ -133,9 +134,10 @@ func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons
 
 	m, err := this.bot.Send(msg)
 
-	if timerExist {
-		go this.setTimer(m, buttons, cxt, cancel) // таймер кнопки
-	}
+	// Отключен таймер на кнопке т.к. при большом количествет присоединившихся пользователях не будет работать
+	// if timerExist {
+	// 	go this.setTimer(m, buttons, cxt, cancel) // таймер кнопки
+	// }
 
 	return m, err
 }
@@ -275,7 +277,7 @@ func (this Telega) GetMessage(update tgbotapi.Update) *tgbotapi.Message {
 }
 
 func (this *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
-	//message.Chat.ID
+	// message.Chat.ID
 	downloadFilebyID := func(FileID string) {
 		var file tgbotapi.File
 		if file, err = this.bot.GetFile(tgbotapi.FileConfig{FileID}); err == nil {

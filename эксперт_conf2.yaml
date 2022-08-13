@@ -1,0 +1,9 @@
+timeout: 60 # время на ответ в секундах, не обязательный параметр, по дефолту 60 секунд
+question:
+  txt: "Кто это?"
+  img: "https://i.imgur.com/ozwc4DR.png"
+answers:
+  - txt: "Сергей"
+  - txt: "Борис"
+    correct: true
+

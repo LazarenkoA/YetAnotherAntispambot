@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"io/ioutil"
 	"os"
 	"strconv"
 	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
 type wrapper struct {
@@ -87,6 +88,11 @@ func main() {
 
 				wd.SendFile(chatID, f.Name())
 				os.RemoveAll(f.Name())
+			}
+		case "test":
+			// для теста
+			msg.NewChatMembers = &[]tgbotapi.User{
+				{ID: 22, FirstName: "test", LastName: "test", UserName: "test", LanguageCode: "", IsBot: false},
 			}
 		default:
 			if command != "" {
@@ -340,6 +346,12 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 		}
 		return result
 	}
+
+	// вместо таймера на кнопке
+	go func() {
+		<-time.After(time.Second * time.Duration(timeout))
+		handlercancel(&update)
+	}()
 }
 
 func wrap(settings map[string]string, err error) *wrapper {
