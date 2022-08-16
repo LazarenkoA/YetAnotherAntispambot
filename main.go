@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -259,6 +260,8 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 	handlercancel := func(*tgbotapi.Update) bool { return true }
 	deleteMessage := func() {}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	b := Buttons{}
 	for _, ans := range conf.Answers {
 		a := ans // для замыкания
@@ -266,6 +269,7 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			from := wd.GetUser(update)
 			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
 				if a.Correct {
+					cancel()
 					wd.EnableWritingMessages(chat.ID, &appendedUser)
 					deleteMessage()
 				} else {
@@ -349,8 +353,13 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 
 	// вместо таймера на кнопке
 	go func() {
-		<-time.After(time.Second * time.Duration(timeout))
-		handlercancel(&update)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second * time.Duration(timeout)):
+			handlercancel(&update)
+			cancel()
+		}
 	}()
 }
 
