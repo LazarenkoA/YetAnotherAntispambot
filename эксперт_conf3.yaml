@@ -1,9 +1,0 @@
-timeout: 60 # время на ответ в секундах, не обязательный параметр, по дефолту 60 секунд
-question:
-  txt: "Какую СУБД не поддерживает 1С?"
-answers:
-  - txt: "MS SQL"
-  - txt: "Oracle" 
-  - txt: "PostgreSQL"
-  - txt: "MongoDB"
-    correct: true
