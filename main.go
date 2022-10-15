@@ -126,10 +126,6 @@ func main() {
 		}
 
 		conf := readCoinf(wd, chatID)
-		if conf == nil {
-			log.Printf("для чата %s %s (%s) не определены настройки\n", msg.Chat.FirstName, msg.Chat.LastName, msg.Chat.UserName)
-			continue
-		}
 		newChatMembers := msg.NewChatMembers
 		if newChatMembers != nil {
 			for _, user := range *newChatMembers {
@@ -140,7 +136,7 @@ func main() {
 		if msg.LeftChatMember != nil && msg.LeftChatMember.ID == me.ID {
 			wd.r.DeleteItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chatID, 10))
 		}
-		if msg.Text == "@"+strings.Trim(me.UserName, " ") && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+		if msg.Text == "@"+strings.Trim(me.UserName, " ") && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && conf != nil {
 			wd.StartVoting(msg, chatID, conf.CountVoted)
 		}
 	}
@@ -259,6 +255,11 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			wd.r.AppendItems(strconv.Itoa(wd.GetMessage(update).From.ID), strChatID)
 			wd.r.Set(strChatID, chat.Title, -1)
 		}
+		return
+	}
+
+	if conf == nil {
+		log.Printf("для чата %s %s (%s) не определены настройки\n", chat.FirstName, chat.LastName, chat.UserName)
 		return
 	}
 
