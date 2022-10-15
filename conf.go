@@ -20,8 +20,9 @@ type Conf struct {
 	Timeout     int    `yaml:"timeout"`
 	KickCaption string `yaml:"kickCaption"`
 
-	Question question  `yaml:"question"`
-	Answers  []*answer `yaml:"answers"`
+	Question   question  `yaml:"question"`
+	Answers    []*answer `yaml:"answers"`
+	CountVoted int       `yaml:"countVoted"`
 }
 
 func LoadConfFromFile(confpath string) (result *Conf, err error) {
@@ -35,6 +36,9 @@ func LoadConfFromFile(confpath string) (result *Conf, err error) {
 func LoadConf(conf []byte) (result *Conf, err error) {
 	result = new(Conf)
 	err = yaml.Unmarshal(conf, &result)
+	if result.CountVoted == 0 {
+		result.CountVoted = 5
+	}
 	return result, err
 }
 
@@ -49,5 +53,6 @@ answers:
     correct: true
   - txt: "Цветы"
   - txt: "Лицо"
-    correct: true`
+    correct: true
+countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5`
 }

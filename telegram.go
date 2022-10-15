@@ -24,7 +24,7 @@ import (
 
 type Button struct {
 	caption string
-	handler *func(*tgbotapi.Update) bool
+	handler func(*tgbotapi.Update, *Button) bool
 	timer   int
 
 	// время начала таймера
@@ -38,14 +38,14 @@ type Buttons []*Button
 
 type Telega struct {
 	bot      *tgbotapi.BotAPI
-	callback map[string]func(tgbotapi.Update)
+	callback map[string]func(tgbotapi.Update) bool
 	hooks    map[string]func(tgbotapi.Update) bool
 	running  int32
 	r        *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
 }
 
 func (this *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
-	this.callback = map[string]func(tgbotapi.Update){}
+	this.callback = map[string]func(tgbotapi.Update) bool{}
 	this.hooks = map[string]func(tgbotapi.Update) bool{}
 	this.r, _ = new(Redis).Create(redisaddr)
 
@@ -70,7 +70,7 @@ func (this *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
 	return this.bot.ListenForWebhook("/"), nil
 }
 
-func (this *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (tgbotapi.Message, error) {
+func (this *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (*tgbotapi.Message, error) {
 	if imgURL != "" {
 		if path, err := downloadFile(imgURL); err == nil {
 			defer os.RemoveAll(path)
@@ -80,7 +80,7 @@ func (this *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons But
 			newmsg.ParseMode = "HTML"
 			return this.createButtonsAndSend(&newmsg, buttons)
 		} else {
-			return tgbotapi.Message{}, err
+			return &tgbotapi.Message{}, err
 		}
 	} else {
 		newmsg := tgbotapi.NewMessage(chatID, msg)
@@ -89,7 +89,7 @@ func (this *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons But
 	}
 }
 
-func (this *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (tgbotapi.Message, error) {
+func (this *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (*tgbotapi.Message, error) {
 	if imgURL != "" {
 		if path, err := downloadFile(imgURL); err == nil {
 			defer os.RemoveAll(path)
@@ -100,7 +100,7 @@ func (this *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Bu
 			newmsg.ParseMode = "HTML"
 			return this.createButtonsAndSend(&newmsg, buttons)
 		} else {
-			return tgbotapi.Message{}, err
+			return &tgbotapi.Message{}, err
 		}
 	} else {
 		newmsg := tgbotapi.NewMessage(chatID, msg)
@@ -116,14 +116,12 @@ func (this *Telega) SendFile(chatID int64, filepath string) error {
 	return err
 }
 
-func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (tgbotapi.Message, error) {
-	_, cancel := context.WithCancel(context.Background())
-
+func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (*tgbotapi.Message, error) {
 	// if _, ok := msg.(tgbotapi.Fileable); ok {
 	//	fmt.Println(1)
 	// }
 
-	buttons.createButtons(msg, this.callback, cancel, 3)
+	buttons.createButtons(msg, this.callback, func() {}, 3)
 
 	timerExist := false
 	for _, b := range buttons {
@@ -139,10 +137,10 @@ func (this *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons
 	// 	go this.setTimer(m, buttons, cxt, cancel) // таймер кнопки
 	// }
 
-	return m, err
+	return &m, err
 }
 
-func (this *Telega) EditMsg(msg tgbotapi.Message, txt string, buttons Buttons) tgbotapi.Message {
+func (this *Telega) EditMsg(msg *tgbotapi.Message, txt string, buttons Buttons) *tgbotapi.Message {
 	editmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, txt)
 	editmsg.ParseMode = "HTML"
 	m, _ := this.createButtonsAndSend(&editmsg, buttons)
@@ -195,23 +193,11 @@ B:
 				}
 			}
 
-			var editmsg tgbotapi.Chattable
-			if msg.Caption != "" {
-				teditmsg := tgbotapi.NewEditMessageCaption(msg.Chat.ID, msg.MessageID, msg.Caption)
-				teditmsg.ParseMode = "HTML"
-				editmsg = &teditmsg
-			} else {
-				teditmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, msg.Text)
-				teditmsg.ParseMode = "HTML"
-				editmsg = &teditmsg
-			}
-
-			buttons.createButtons(editmsg, this.callback, cancel, 3)
-			this.bot.Send(editmsg)
+			this.EditButtons(&msg, buttons)
 
 			if button != nil {
 				if button.handler != nil {
-					(*button.handler)(nil)
+					button.handler(nil, button)
 				}
 
 				delete(this.callback, button.ID)
@@ -224,14 +210,19 @@ B:
 }
 
 func (this *Telega) CallbackQuery(update tgbotapi.Update) bool {
-	if update.CallbackQuery == nil {
+	if update.CallbackQuery == nil || update.CallbackQuery.Message == nil {
 		return false
 	}
+
 	if call, ok := this.callback[update.CallbackQuery.Data]; ok {
 		if call != nil {
-			call(update)
+			if call(update) {
+				this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+					ChatID:    update.CallbackQuery.Message.Chat.ID,
+					MessageID: update.CallbackQuery.Message.MessageID})
+				delete(this.callback, update.CallbackQuery.Data)
+			}
 		}
-		delete(this.callback, update.CallbackQuery.Data)
 	}
 
 	return true
@@ -303,17 +294,22 @@ func (this *Telega) ReadFile(message *tgbotapi.Message) (data string, err error)
 	return data, err
 }
 
-func (this *Telega) DisableSendMessages(chatID int64, user *tgbotapi.User) {
+func (this *Telega) DisableSendMessages(chatID int64, user *tgbotapi.User, duration time.Duration) {
 	denied := false
+	var untilDate int64
+	if duration > 0 {
+		untilDate = time.Now().Add(duration).Unix()
+	}
+
 	_, err := this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
 		ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			ChatID:             chatID,
-			SuperGroupUsername: "",
-			ChannelUsername:    "",
-			UserID:             user.ID,
+			ChatID: chatID,
+			UserID: user.ID,
 		},
+		UntilDate:       untilDate,
 		CanSendMessages: &denied,
 	})
+
 	if err != nil {
 		log.Printf("При ограничении прав пользователя произошла ошибка: %v\n", err)
 	}
@@ -323,10 +319,8 @@ func (this *Telega) EnableWritingMessages(chatID int64, user *tgbotapi.User) {
 	access := true
 	this.bot.RestrictChatMember(tgbotapi.RestrictChatMemberConfig{
 		ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			ChatID:             chatID,
-			SuperGroupUsername: "",
-			ChannelUsername:    "",
-			UserID:             user.ID,
+			ChatID: chatID,
+			UserID: user.ID,
 		},
 		CanSendMessages:       &access,
 		CanSendMediaMessages:  &access,
@@ -382,7 +376,7 @@ func (this *Telega) secondAttempt(users []string, err error, userID string) bool
 
 // Buttons
 
-func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update), cancel context.CancelFunc, countColum int) {
+func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update) bool, cancel context.CancelFunc, countColum int) {
 	keyboard := tgbotapi.InlineKeyboardMarkup{}
 	var Buttons = []tgbotapi.InlineKeyboardButton{}
 
@@ -397,28 +391,29 @@ func (this Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]fu
 		v.ReplyMarkup = &keyboard
 	}
 
-	for _, item := range this {
-		handler := item.handler
-		if item.ID == "" {
+	for i, _ := range this {
+		currentButton := this[i]
+
+		handler := currentButton.handler
+		if currentButton.ID == "" {
 			UUID, _ := uuid.NewV4()
-			item.ID = UUID.String()
+			currentButton.ID = UUID.String()
 		}
 
-		callback[item.ID] = func(update tgbotapi.Update) {
+		callback[currentButton.ID] = func(update tgbotapi.Update) bool {
 			if handler != nil {
-				if (*handler)(&update) {
-					cancel()
-				}
+				return handler(&update, currentButton)
 			}
+			return false
 		}
 
-		caption := item.caption
-		if !item.start.IsZero() {
-			second := int(item.start.Sub(time.Now()).Seconds())
-			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", item.caption, second/3600, (second%3600)/60, second%60)
+		caption := currentButton.caption
+		if !currentButton.start.IsZero() {
+			second := int(currentButton.start.Sub(time.Now()).Seconds())
+			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", currentButton.caption, second/3600, (second%3600)/60, second%60)
 		}
 
-		btn := tgbotapi.NewInlineKeyboardButtonData(caption, item.ID)
+		btn := tgbotapi.NewInlineKeyboardButtonData(caption, currentButton.ID)
 		Buttons = append(Buttons, btn)
 	}
 
@@ -568,4 +563,125 @@ func (this *Telega) getDelay() (result time.Duration) {
 		}
 	}
 	return
+}
+
+func (this *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVote int) {
+	user := sourceMsg.ReplyToMessage.From
+	msg := fmt.Sprintf("Что сделать с %s %s (@%s)?", user.FirstName, user.LastName, user.UserName)
+
+	b := Buttons{}
+	var sentMessage *tgbotapi.Message
+	votedUsers := map[int]struct{}{}
+
+	userCanVote := func(u *tgbotapi.User) bool {
+		if u.ID == user.ID {
+			return false
+		}
+		if _, ok := votedUsers[u.ID]; ok {
+			return false
+		}
+		votedUsers[u.ID] = struct{}{}
+		return true
+	}
+
+	ban, ro, forgive := 0, 0, 0
+	hBan := func(u *tgbotapi.Update, currentButton *Button) bool {
+		if !userCanVote(u.CallbackQuery.From) {
+			return false
+		}
+
+		ban++
+		if ban >= countVote {
+			this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+				ChatID:    chatID,
+				MessageID: sourceMsg.MessageID})
+
+			this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+				ChatID:    chatID,
+				MessageID: sourceMsg.ReplyToMessage.MessageID})
+
+			this.bot.KickChatMember(tgbotapi.KickChatMemberConfig{
+				ChatMemberConfig: tgbotapi.ChatMemberConfig{
+					ChatID: chatID,
+					UserID: user.ID,
+				},
+				UntilDate: 0,
+			})
+			return true
+		}
+
+		currentButton.caption = fmt.Sprintf("Бан (%d/%d)", ban, countVote)
+		this.EditButtons(sentMessage, b)
+		return false
+	}
+	hRO := func(u *tgbotapi.Update, currentButton *Button) bool {
+		if !userCanVote(u.CallbackQuery.From) {
+			return false
+		}
+
+		ro++
+		if ro >= countVote {
+			this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+				ChatID:    chatID,
+				MessageID: sourceMsg.MessageID})
+
+			this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+				ChatID:    chatID,
+				MessageID: sourceMsg.ReplyToMessage.MessageID})
+
+			this.DisableSendMessages(chatID, user, time.Hour*24)
+			return true
+		}
+
+		currentButton.caption = fmt.Sprintf("RO на день (%d/%d)", ro, countVote)
+		this.EditButtons(sentMessage, b)
+		return false
+	}
+	b = Buttons{
+		{
+			caption: "Бан",
+			handler: hBan,
+		},
+		{
+			caption: "RO на день",
+			handler: hRO,
+		},
+		{
+			caption: "Простить",
+			handler: func(u *tgbotapi.Update, currentButton *Button) bool {
+				if !userCanVote(u.CallbackQuery.From) {
+					return false
+				}
+
+				forgive++
+				currentButton.caption = fmt.Sprintf("Простить (%d/%d)", forgive, countVote)
+				this.EditButtons(sentMessage, b)
+				if forgive >= countVote {
+					this.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+						ChatID:    chatID,
+						MessageID: sourceMsg.MessageID})
+					return true
+				}
+				return false
+			},
+		},
+	}
+
+	sentMessage, _ = this.SendMsg(msg, "", chatID, b)
+}
+
+func (this *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
+	var editmsg tgbotapi.Chattable
+	if msg.Caption != "" {
+		teditmsg := tgbotapi.NewEditMessageCaption(msg.Chat.ID, msg.MessageID, msg.Caption)
+		teditmsg.ParseMode = "HTML"
+		editmsg = &teditmsg
+	} else {
+		teditmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, msg.Text)
+		teditmsg.ParseMode = "HTML"
+		editmsg = &teditmsg
+	}
+
+	buttons.createButtons(editmsg, this.callback, func() {}, 3)
+	this.bot.Send(editmsg)
 }

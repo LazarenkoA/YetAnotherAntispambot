@@ -5,3 +5,4 @@ answers:
   - txt: "2"
     correct: true
   - txt: "3"
+countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5

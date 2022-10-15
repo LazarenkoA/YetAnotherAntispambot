@@ -7,3 +7,4 @@ answers:
     correct: true
   - txt: "Пес"
   - txt: "Слон"
+countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5
