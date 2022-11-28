@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/garyburd/redigo/redis"
 	"time"
+
+	"github.com/garyburd/redigo/redis"
 )
 
 type Redis struct {
@@ -144,7 +145,7 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 func (R *Redis) StringMap(key string) (map[string]string, error) {
 	value, err := redis.StringMap(R.pool.Get().Do("HGETALL", key))
 	if err != nil && err != redis.ErrNil {
-		fmt.Println("Redis. Ошибка при выполнении StringMap")
+		fmt.Printf("Redis. Ошибка при выполнении StringMap: %v", err)
 	}
 	return value, err
 }

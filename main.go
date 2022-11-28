@@ -62,6 +62,9 @@ func main() {
 
 		chatID := msg.Chat.ID
 		me, _ := wd.bot.GetMe()
+		if p := strings.Split(msg.Text, "@"); msg.Text != "" && msg.Text[0] == '/' && len(p) == 2 && p[1] != me.UserName {
+			continue
+		}
 
 		// обработка команд кнопок
 		if wd.CallbackQuery(update) {
@@ -102,6 +105,8 @@ func main() {
 				{ID: 22, FirstName: "test", LastName: "test", UserName: "test", LanguageCode: "", IsBot: false},
 			}
 			continue
+		case "allchats":
+			fmt.Println(strings.Join(wd.getAllChats(), "\n"))
 		case "help":
 			msg := fmt.Sprintf("Антиспам для групп, при входе нового участника в группу бот задает вопрос, если ответа нет, участник блокируется.\n"+
 				"Если нужно заблокировать пользователя тегните сообщения ботом (ответить на сообщение с текстом @%s).", me.UserName)
@@ -125,18 +130,18 @@ func main() {
 			}
 		}
 
-		conf := readCoinf(wd, chatID)
 		newChatMembers := msg.NewChatMembers
 		if newChatMembers != nil {
 			for _, user := range *newChatMembers {
-				handlerAddNewMembers(wd, update, user, conf)
+				handlerAddNewMembers(wd, update, user, readCoinf(wd, chatID))
 			}
 		}
 
 		if msg.LeftChatMember != nil && msg.LeftChatMember.ID == me.ID {
 			wd.r.DeleteItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chatID, 10))
 		}
-		if msg.Text == "@"+strings.Trim(me.UserName, " ") && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && conf != nil {
+		if msg.Text == "@"+strings.Trim(me.UserName, " ") && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+			conf := readCoinf(wd, chatID)
 			wd.StartVoting(msg, chatID, conf.CountVoted)
 		}
 	}
@@ -240,13 +245,14 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 			// отслеживаем статус, когда сделают администратором удаляем сообщение
 			go func() {
 				tick := time.NewTicker(time.Second)
+				defer tick.Stop()
+
 				for range tick.C {
 					if wd.MeIsAdmin(chat.ChatConfig()) {
 						wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
 							ChatID:    chat.ID,
 							MessageID: message.MessageID})
-
-						tick.Stop()
+						break
 					}
 				}
 			}()
@@ -321,9 +327,13 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 					})
 				}
 			} else {
+				add := "к тому же вы ответили не верно."
+				if a.Correct {
+					add = "но вы ответили верно, молодцом!"
+				}
 				wd.bot.AnswerCallbackQuery(tgbotapi.CallbackConfig{
 					CallbackQueryID: update.CallbackQuery.ID,
-					Text:            "Вопрос не для вас",
+					Text:            "Вопрос не для вас, " + add,
 					ShowAlert:       true,
 				})
 			}
