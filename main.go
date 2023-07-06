@@ -114,7 +114,7 @@ func main() {
 			continue
 		default:
 			if command != "" {
-				wd.SendMsg("Команда "+command+" не поддерживается", "", chatID, Buttons{})
+				fmt.Printf("Команда %s не поддерживается\n", command)
 				continue
 			} else {
 				key := strconv.FormatInt(chatID, 10)
