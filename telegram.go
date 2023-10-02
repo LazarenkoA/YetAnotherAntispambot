@@ -133,7 +133,7 @@ func (t *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (
 	//	fmt.Println(1)
 	// }
 
-	buttons.createButtons(msg, t.callback, func() {}, 3)
+	buttons.createButtons(msg, t.callback, func() {}, 2)
 
 	timerExist := false
 	for _, b := range buttons {
