@@ -701,6 +701,6 @@ func (t *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
 		editmsg = &teditmsg
 	}
 
-	buttons.createButtons(editmsg, t.callback, func() {}, 3)
+	buttons.createButtons(editmsg, t.callback, func() {}, 2)
 	t.bot.Send(editmsg)
 }
