@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"github.com/alecthomas/kingpin/v2"
+	"github.com/pkg/errors"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -23,14 +26,22 @@ var (
 	WebhookURL = os.Getenv("WebhookURL")
 	port       = os.Getenv("PORT")
 	redisaddr  = os.Getenv("REDIS")
+	cert       = os.Getenv("CRT")
+)
+
+var (
+	kp    *kingpin.Application
+	debug bool
 )
 
 const (
-	questionskey = "questions"
+	questionsKey = "questions"
+	lastMsgKey   = "lastMsg"
 )
 
 func init() {
-
+	kp = kingpin.New("Антиспам бот", "")
+	kp.Flag("debug", "вывод отладочной информации").Short('d').BoolVar(&debug)
 }
 
 func main() {
@@ -48,13 +59,24 @@ func main() {
 	}
 
 	wd := new(Telega)
-	wdUpdate, err := wd.New()
+	wdUpdate, err := wd.New(debug, cert)
 	if err != nil {
-		fmt.Println("не удалось подключить бота, ошибка:\n", err.Error())
+		fmt.Println("create telegrtam client error:\n", err.Error())
 		os.Exit(1)
 	}
 
-	for update := range wdUpdate {
+	ctx, cancel := context.WithCancel(context.Background())
+	go shutdown(wd, cancel)
+
+	for {
+		var update tgbotapi.Update
+
+		select {
+		case <-ctx.Done():
+			return
+		case update = <-wdUpdate:
+		}
+
 		msg := wd.GetMessage(update)
 		if msg == nil {
 			continue
@@ -91,7 +113,7 @@ func main() {
 			}
 			continue
 		case "exampleconf":
-			if f, err := ioutil.TempFile("", "*.yaml"); err == nil {
+			if f, err := os.CreateTemp("", "*.yaml"); err == nil {
 				f.WriteString(confExample())
 				f.Close()
 
@@ -105,6 +127,8 @@ func main() {
 				{ID: 22, FirstName: "test", LastName: "test", UserName: "test", LanguageCode: "", IsBot: false},
 			}
 			continue
+		case "clearLastMsg":
+			wd.deleteLastMsg(msg.From.ID)
 		case "allchats":
 			fmt.Println(strings.Join(wd.getAllChats(), "\n"))
 		case "help":
@@ -130,19 +154,37 @@ func main() {
 			}
 		}
 
-		newChatMembers := msg.NewChatMembers
-		if newChatMembers != nil {
-			for _, user := range *newChatMembers {
-				handlerAddNewMembers(wd, update, user, readCoinf(wd, chatID))
+		if msg.NewChatMembers != nil {
+			for _, user := range *msg.NewChatMembers {
+				handlerAddNewMembers(wd, update, user, readConf(wd, chatID))
 			}
+
+			continue
 		}
+
+		//if msg.LeftChatMember != nil {
+		//	fmt.Println("-----", msg.LeftChatMember.ID)
+		//	wd.deleteLastMsg(msg.LeftChatMember.ID)
+		//	continue
+		//}
 
 		if msg.LeftChatMember != nil && msg.LeftChatMember.ID == me.ID {
 			wd.r.DeleteItems(strconv.Itoa(wd.GetMessage(update).From.ID), strconv.FormatInt(chatID, 10))
+			continue
 		}
-		if msg.Text == "@"+strings.Trim(me.UserName, " ") && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
-			conf := readCoinf(wd, chatID)
+
+		// вызов кворума на бан
+		if strings.Contains(msg.Text, "@"+strings.TrimSpace(me.UserName)) && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+			conf := readConf(wd, chatID)
 			wd.StartVoting(msg, chatID, conf.CountVoted)
+		}
+
+		user := wd.GetMessage(update).From
+		if txt := wd.GetMessage(update).Text; txt != "" {
+			// если это первое сообщение анализируем его на спам
+			if s, r := wd.IsSPAM(user.ID, txt, readConf(wd, chatID)); s {
+				wd.deleteSpam(user, r, wd.GetMessage(update).MessageID, chatID)
+			}
 		}
 	}
 }
@@ -176,13 +218,13 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 				return false
 			}
 			if confdata, err := wd.ReadFile(upd.Message); err == nil {
-				settings, err := wrap(wd.r.StringMap(questionskey)).result()
+				settings, err := wrap(wd.r.StringMap(questionsKey)).result()
 				if err != nil {
 					wd.SendMsg(fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", err), "", chatID, Buttons{})
 				}
 
 				settings[chat] = confdata
-				wd.r.SetMap(questionskey, settings)
+				wd.r.SetMap(questionsKey, settings)
 
 				return true
 			} else {
@@ -209,14 +251,15 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 }
 
 func getSettings(wd *Telega, key string, chatID int64) bool {
-	settings, err := wrap(wd.r.StringMap(questionskey)).result()
+	settings, err := wrap(wd.r.StringMap(questionsKey)).result()
 	if err != nil {
 		log.Println(fmt.Errorf("ошибка получения конфига из redis: %w", err))
 	}
 
 	if s, ok := settings[key]; ok {
-		if f, err := ioutil.TempFile("", "*.yaml"); err == nil {
+		if f, err := os.CreateTemp("", "*.yaml"); err == nil {
 			defer os.RemoveAll(f.Name())
+
 			f.WriteString(s)
 			f.Close()
 
@@ -268,6 +311,13 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 		log.Printf("для чата %s %s (%s) не определены настройки\n", chat.FirstName, chat.LastName, chat.UserName)
 		return
 	}
+
+	//if true {
+	//	wd.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+	//		ChatID:    chat.ID,
+	//		MessageID: parentMsgID})
+	//	return
+	//}
 
 	wd.DisableSendMessages(chat.ID, &appendedUser, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 
@@ -377,10 +427,11 @@ func handlerAddNewMembers(wd *Telega, update tgbotapi.Update, appendedUser tgbot
 	}()
 }
 
-func readCoinf(wd *Telega, chatID int64) *Conf {
-	settings, err := wrap(wd.r.StringMap(questionskey)).result()
+func readConf(wd *Telega, chatID int64) *Conf {
+	settings, err := wrap(wd.r.StringMap(questionsKey)).result() // todo переделать на мапу в памяти как lastMsg
 	if err != nil {
-		wd.SendMsg(fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", err), "", chatID, Buttons{})
+		log.Println(errors.Wrap(err, "read settings error"))
+		return nil
 	}
 
 	key := strconv.FormatInt(chatID, 10)
@@ -401,6 +452,16 @@ func wrap(settings map[string]string, err error) *wrapper {
 		settings: settings,
 		err:      err,
 	}
+}
+
+func shutdown(wd *Telega, cancel context.CancelFunc) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
+
+	log.Println("Shutting down")
+	wd.Shutdown()
+	cancel()
 }
 
 func (w *wrapper) result() (map[string]string, error) {

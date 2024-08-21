@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"time"
 
 	"github.com/garyburd/redigo/redis"
@@ -46,7 +47,7 @@ func (R *Redis) KeyExists(key string) bool {
 
 func (R *Redis) Keys() []string {
 	keys, err := redis.Strings(R.pool.Get().Do("KEYS", "*"))
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Printf("Redis. Ошибка при выполнении KEYS. %v\n", err)
 	}
 
@@ -86,7 +87,7 @@ func (R *Redis) Set(key, value string, ttl time.Duration) error {
 
 func (R *Redis) Get(key string) (string, error) {
 	v, err := redis.String(R.pool.Get().Do("GET", key))
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Printf("Redis. Ошибка при выполнении Get. %v\n", err)
 	}
 	return v, err
@@ -94,7 +95,7 @@ func (R *Redis) Get(key string) (string, error) {
 
 func (R *Redis) DeleteItems(key, value string) error {
 	_, err := R.pool.Get().Do("SREM", key, value)
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Println("Redis. Ошибка при выполнении DeleteItems")
 	}
 	return err
@@ -102,7 +103,7 @@ func (R *Redis) DeleteItems(key, value string) error {
 
 func (R *Redis) Items(key string) ([]string, error) {
 	items, err := redis.Strings(R.pool.Get().Do("SMEMBERS", key))
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Println("Redis. Ошибка при выполнении Items")
 	}
 	return items, err
@@ -110,7 +111,7 @@ func (R *Redis) Items(key string) ([]string, error) {
 
 func (R *Redis) LPOP(key string) string {
 	item, err := redis.String(R.pool.Get().Do("LPOP", key))
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Println("Redis. Ошибка при выполнении LPOP")
 	}
 	return item
@@ -118,7 +119,7 @@ func (R *Redis) LPOP(key string) string {
 
 func (R *Redis) RPUSH(key, value string) error {
 	_, err := R.pool.Get().Do("RPUSH", key, value)
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Println("Redis. Ошибка при выполнении RPUSH")
 	}
 	return err
@@ -127,7 +128,7 @@ func (R *Redis) RPUSH(key, value string) error {
 // Добавляет в неупорядоченную коллекцию значение
 func (R *Redis) AppendItems(key, value string) {
 	_, err := R.pool.Get().Do("SADD", key, value)
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Println("Redis. Ошибка при выполнении AppendItems")
 	}
 }
@@ -140,11 +141,12 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 			break
 		}
 	}
+
 }
 
 func (R *Redis) StringMap(key string) (map[string]string, error) {
 	value, err := redis.StringMap(R.pool.Get().Do("HGETALL", key))
-	if err != nil && err != redis.ErrNil {
+	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Printf("Redis. Ошибка при выполнении StringMap: %v", err)
 	}
 	return value, err

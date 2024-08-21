@@ -1,11 +1,12 @@
 package main
 
 import (
+	"Antispam/giga"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -37,20 +39,29 @@ const keyActiveMSG = "keyActiveMSG"
 type Buttons []*Button
 
 type Telega struct {
-	bot      *tgbotapi.BotAPI
-	callback map[string]func(tgbotapi.Update) bool
-	hooks    map[string]func(tgbotapi.Update) bool
-	running  int32
-	r        *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
+	bot        *tgbotapi.BotAPI
+	callback   map[string]func(tgbotapi.Update) bool
+	hooks      map[string]func(tgbotapi.Update) bool
+	running    int32
+	r          *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
+	gClient    *giga.Client
+	one        sync.Once
+	lastMsg    map[string]string // для хранения последнего сообщения по пользователю
+	mx         sync.RWMutex
+	httpServer *http.Server
 }
 
-func (t *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
+func (t *Telega) New(debug bool, certFilePath string) (result tgbotapi.UpdatesChannel, err error) {
 	t.callback = map[string]func(tgbotapi.Update) bool{}
 	t.hooks = map[string]func(tgbotapi.Update) bool{}
-	t.r, _ = new(Redis).Create(redisaddr)
+	t.r, err = new(Redis).Create(redisaddr)
+	if err != nil {
+		return nil, errors.Wrap(err, "create redis")
+	}
+
+	t.lastMsg, _ = t.r.StringMap(lastMsgKey)
 
 	t.bot, err = tgbotapi.NewBotAPIWithClient(BotToken, new(http.Client))
-	// t.bot.Debug = true
 	if err != nil {
 		return nil, err
 	}
@@ -61,12 +72,32 @@ func (t *Telega) New() (result tgbotapi.UpdatesChannel, err error) {
 		}
 	}
 
-	_, err = t.bot.SetWebhook(tgbotapi.NewWebhook(WebhookURL))
-	if err != nil {
-		return nil, err
+	t.bot.Debug = debug
+
+	if certFilePath != "" {
+		f, err := os.Open(certFilePath)
+		if err != nil {
+			return nil, errors.Wrap(err, "open cert error")
+		}
+
+		b, _ := io.ReadAll(f)
+		fileBytes := tgbotapi.FileBytes{Bytes: b}
+		_, err = t.bot.SetWebhook(tgbotapi.NewWebhookWithCert(WebhookURL, fileBytes))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		_, err = t.bot.SetWebhook(tgbotapi.NewWebhook(WebhookURL))
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	go http.ListenAndServe(":"+port, nil)
+	t.httpServer = &http.Server{Addr: ":" + port}
+	go t.httpServer.ListenAndServe()
+
+	fmt.Printf("listen port: %s, debug: %v\n", port, debug)
+
 	return t.bot.ListenForWebhook("/"), nil
 }
 
@@ -386,6 +417,78 @@ func (t *Telega) secondAttempt(users []string, err error, userID string) bool {
 	return false
 }
 
+func (t *Telega) deleteLastMsg(userID int) {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+
+	delete(t.lastMsg, strconv.Itoa(userID))
+}
+
+func (t *Telega) deleteAllLastMsg() {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+
+	t.lastMsg = map[string]string{}
+}
+
+func (t *Telega) IsSPAM(userID int, msg string, conf *Conf) (bool, string) {
+	if conf == nil || conf.AI == nil {
+		return false, ""
+	}
+
+	t.mx.Lock()
+	defer t.mx.Unlock()
+
+	// если есть последнее сообщение тогда выходим, не проверяем
+	if _, ok := t.lastMsg[strconv.Itoa(userID)]; ok {
+		return false, ""
+	}
+
+	c := t.gigaClient(conf.AI.GigaChat.ClientID, conf.AI.GigaChat.ClientSecret)
+	s, p, r, err := c.GetSpamPercent(msg)
+	if err != nil {
+		log.Println(err)
+	}
+
+	log.Printf("msg: %s\n"+
+		"\tsolution: %v\n"+
+		"\tpercent: %d\n"+
+		"\treason: %s\n", msg, s, p, r)
+
+	if !s {
+		t.lastMsg[strconv.Itoa(userID)] = msg
+	}
+
+	return s, r
+}
+
+func (t *Telega) gigaClient(clientId, clientSecret string) *giga.Client {
+	t.one.Do(func() {
+		t.gClient, _ = giga.NewGigaClient(context.Background(), clientId, clientSecret)
+	})
+
+	return t.gClient
+}
+
+func (t *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
+	t.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+		ChatID:    chatID,
+		MessageID: messageID})
+
+	usrName := user.FirstName + " " + user.LastName
+	if user.UserName != "" {
+		usrName = "@" + user.UserName
+	}
+
+	msg, _ := t.SendMsg(fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), "", chatID, Buttons{})
+
+	time.Sleep(time.Second * 10)
+
+	t.bot.DeleteMessage(tgbotapi.DeleteMessageConfig{
+		ChatID:    chatID,
+		MessageID: msg.MessageID})
+}
+
 // Buttons
 
 func (t Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update) bool, cancel context.CancelFunc, countColum int) {
@@ -457,13 +560,13 @@ func (t Buttons) breakButtonsByColum(Buttons []tgbotapi.InlineKeyboardButton, co
 func getngrokWebhookURL() string {
 	// файл Ngrok должен лежать рядом с основным файлом бота
 	currentDir, _ := os.Getwd()
-	ngrokpath := filepath.Join(currentDir, "ngrok.exe")
+	ngrokpath := filepath.Join(currentDir, "ngrok", "ngrok.exe")
 	if _, err := os.Stat(ngrokpath); os.IsNotExist(err) {
 		return ""
 	}
 
-	err := make(chan error, 0)
-	result := make(chan string, 0)
+	err := make(chan error)
+	result := make(chan string)
 
 	// горутина для запуска ngrok
 	go func(chanErr chan<- error) {
@@ -506,7 +609,7 @@ func getngrokWebhookURL() string {
 				}
 				continue
 			}
-			body, _ := ioutil.ReadAll(resp.Body)
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
 			var ngrok = new(ngrokAPI)
@@ -538,7 +641,8 @@ func getngrokWebhookURL() string {
 	}(result, err)
 
 	select {
-	case <-err:
+	case e := <-err:
+		log.Println(e)
 		return ""
 	case r := <-result:
 		return r
@@ -703,4 +807,23 @@ func (t *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
 
 	buttons.createButtons(editmsg, t.callback, func() {}, 2)
 	t.bot.Send(editmsg)
+}
+
+func (t *Telega) Shutdown() {
+	t.r.SetMap(lastMsgKey, t.lastMsg)
+
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
+	err := t.httpServer.Shutdown(ctx)
+	if err != nil {
+		log.Println("http server shutdown error:", err.Error())
+	}
+}
+
+func In[T comparable](value T, array []T) bool {
+	for _, item := range array {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }

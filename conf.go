@@ -23,6 +23,13 @@ type Conf struct {
 	Question   question  `yaml:"question"`
 	Answers    []*answer `yaml:"answers"`
 	CountVoted int       `yaml:"countVoted"`
+	MuteMode   bool      `yaml:"muteMode"` // todo пока не используется
+	AI         *struct {
+		GigaChat *struct {
+			ClientID     string `yaml:"clientID"`
+			ClientSecret string `yaml:"clientSecret"`
+		} `yaml:"gigachat"`
+	} `yaml:"ai"`
 }
 
 func LoadConfFromFile(confpath string) (result *Conf, err error) {
@@ -54,5 +61,9 @@ answers:
   - txt: "Цветы"
   - txt: "Лицо"
     correct: true
-countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5`
+countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5
+ai: # если настройка задана антиспам будет аанализировать первое отправвленое сообщение от пользователя на предмет спам - не спам
+  gigachat:
+    clientID: 122323
+    clientSecret: 3fffff`
 }
