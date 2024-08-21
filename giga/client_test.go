@@ -24,6 +24,21 @@ func Test_GetCommitMsg(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
 
+	//
+	//test := iter.Seq[string](func(yield func(string) bool) {
+	//	yield("1")
+	//	yield("2")
+	//	yield("3")
+	//	yield("4")
+	//})
+	//
+	////n, s := iter.Pull[string](test)
+	//
+	//
+	//for v := range test {
+	//	fmt.Println(v)
+	//}
+
 	t.Run("error create", func(t *testing.T) {
 		p := gomonkey.ApplyFunc(gigachat.NewInsecureClient, func(clientId string, clientSecret string) (*gigachat.Client, error) {
 			return nil, errors.New("error")
@@ -94,7 +109,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli.client = client
 
 		_, _, _, err := cli.GetSpamPercent("")
-		assert.EqualError(t, err, "diff is not defined")
+		assert.EqualError(t, err, "message is not defined")
 	})
 	t.Run("pass", func(t *testing.T) {
 		p := gomonkey.ApplyFunc(gigachat.NewInsecureClient, func(clientId string, clientSecret string) (*gigachat.Client, error) {

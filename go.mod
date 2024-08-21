@@ -1,10 +1,11 @@
 module Antispam
 
+//go 1.23
 go 1.21
 
-replace (
-	github.com/paulrzcz/go-gigachat => ../../GIT/go-gigachat
-)
+//replace (
+//	github.com/paulrzcz/go-gigachat => ../../GIT/go-gigachat
+//)
 
 require (
 	github.com/LazarenkoA/GigaCommits v0.0.0-20240628191326-dacd87122b7d
