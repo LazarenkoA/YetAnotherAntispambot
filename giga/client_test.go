@@ -2,13 +2,14 @@ package giga
 
 import (
 	"context"
+	"testing"
+
 	mock_giga "github.com/LazarenkoA/GigaCommits/giga/mock"
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/golang/mock/gomock"
 	"github.com/paulrzcz/go-gigachat"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func Test_prompt(t *testing.T) {
@@ -24,20 +25,23 @@ func Test_GetCommitMsg(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
 
-	//
-	//test := iter.Seq[string](func(yield func(string) bool) {
-	//	yield("1")
-	//	yield("2")
-	//	yield("3")
-	//	yield("4")
-	//})
-	//
-	////n, s := iter.Pull[string](test)
-	//
-	//
-	//for v := range test {
-	//	fmt.Println(v)
-	//}
+	// test := iter.Seq[string](func(yield func(string) bool) {
+	// 	yield("1")
+	// 	yield("2")
+	// 	yield("3")
+	// 	yield("4")
+	// })
+
+	//n, s := iter.Pull[string](test)
+
+	// test := func(yield func(str string) bool) {
+	// 	yield("re")
+	// 	yield("куку")
+	// }
+
+	// for v := range test {
+	// 	fmt.Println(v)
+	// }
 
 	t.Run("error create", func(t *testing.T) {
 		p := gomonkey.ApplyFunc(gigachat.NewInsecureClient, func(clientId string, clientSecret string) (*gigachat.Client, error) {
