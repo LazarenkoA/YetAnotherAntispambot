@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	dry "github.com/ungerik/go-dry"

@@ -69,31 +69,31 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 	}
 
 	parts := strings.Split(resp.Choices[0].Message.Content, "|")
-	if len(parts) != 3 {
-		log.Println("bad response format: ", resp.Choices[0].Message.Content)
+	if len(parts) != 2 {
+		log.Println("bad response format, parts not 2: ", resp.Choices[0].Message.Content)
 		return false, -1, "", errors.New("bad response format")
 	}
 
-	solution, err := strconv.ParseBool(strings.TrimSpace(parts[0]))
-	if err != nil {
-		log.Println("parse bool, bad response format: ", resp.Choices[0].Message.Content)
-		return false, -1, "", errors.New("bad response format")
-	}
+	//solution, errSolution := strconv.ParseBool(strings.TrimSpace(parts[0]))
+	//if err != nil {
+	//	log.Println("parse bool, bad response format: ", resp.Choices[0].Message.Content)
+	//	return false, -1, "", errors.New("bad response format")
+	//}
 
-	percent, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	percent, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 	if err != nil {
 		log.Println("parse int, bad response format: ", resp.Choices[0].Message.Content)
 		return false, -1, "", errors.New("bad response format")
 	}
 
-	return solution, percent, strings.TrimSpace(parts[2]), nil
+	return percent >= 70, percent, strings.TrimSpace(parts[1]), nil
 }
 
 func (c *Client) prompt() string {
-	return fmt.Sprintf("Ты модератор IT чата. В чате запрещен наем сотрудников. Зашел новый участник и отправил новое сообщение, произведи анализ сообщения из чата и оцени вероятность того, что оно является спамом.\n" +
+	return fmt.Sprintf("Ты модератор IT чата. В ЧАТА ЗАПРЕЩЕН ПОИСК РАБОТЫ И НАЕМ СОТРУДНИКОВ. Зашел новый участник и отправил новое сообщение, произведи анализ сообщения из чата и оцени вероятность того, что оно является спамом.\n" +
 		"Верни число в процентах (от 0 до 100), где 0 означает, что сообщение определенно не является спамом, а 100 означает, что сообщение определенно является спамом.\n" +
-		"Ответ должен соответствовать такому шаблону: <bool: спам или не спам>|<int: вероятность того что это спам>|<string: пояснение почему ты считаешь это спамом>\n" +
-		"например true|89|в сообщении фигурирует фраза про криптовалюту и заработок\n" +
+		"Ответ должен соответствовать такому шаблону: <int: вероятность того что это спам>|<string: пояснение почему ты считаешь это спамом>\n" +
+		"например 89|в сообщении фигурирует фраза про криптовалюту и заработок\n" +
 		"Вот сообщение:")
 }
 
