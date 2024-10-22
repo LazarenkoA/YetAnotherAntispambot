@@ -9,3 +9,5 @@ YetAnotherAntispambot — это антиспам-бот для групповы
 
 пример бота https://t.me/YetAnotherAntispambot
 
+![Telegram_okImzBaSG2.png](doc%2FTelegram_okImzBaSG2.png)
+![Telegram_8gVXaL819u.png](doc%2FTelegram_8gVXaL819u.png)
