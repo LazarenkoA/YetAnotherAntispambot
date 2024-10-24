@@ -387,8 +387,13 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		timer:   timeout,
 	})
 
-	txt := fmt.Sprintf("Привет %s %s\nДля проверки на антиспам просьба ответить на вопрос (на ответ дается %d секунд):"+
-		"\n\n%s", appendedUser.FirstName, appendedUser.LastName, timeout, conf.Question.Txt)
+	member := appendedUser.FirstName + " " + appendedUser.LastName
+	if appendedUser.UserName != "" {
+		member = "@" + appendedUser.UserName
+	}
+
+	txt := fmt.Sprintf("Привет %s\nДля проверки на антиспам просьба ответить на вопрос (на ответ дается %d секунд):"+
+		"\n\n%s", member, timeout, conf.Question.Txt)
 
 	if message, err := wd.SendMsg(txt, conf.Question.Img, chat.ID, b); err != nil {
 		log.Println(errors.Wrap(err, "SendMsg error"))
