@@ -12,5 +12,4 @@ YetAnotherAntispambot — это антиспам-бот для групповы
 
 ![Telegram_8gVXaL819u.png](doc%2FTelegram_8gVXaL819u.png)
 
-
-![Telegram_8gVXaL819u.png](doc%2FTelegram_8gVXaL819u.png)
+![Telegram_jR1UAxQiJc.png](doc%2FTelegram_jR1UAxQiJc.png)
