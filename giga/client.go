@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/paulrzcz/go-gigachat"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"log"
 	"strconv"
 	"strings"
@@ -21,8 +22,8 @@ type Client struct {
 	client IGigaClient
 }
 
-func NewGigaClient(ctx context.Context, clientId, clientSecret string) (*Client, error) {
-	client, err := gigachat.NewInsecureClient(clientId, clientSecret)
+func NewGigaClient(ctx context.Context, authKey string) (*Client, error) {
+	client, err := gigachat.NewInsecureClientWithAuthKey(authKey)
 	if err != nil {
 		return nil, errors.Wrap(err, "newGigaClient error")
 	}
@@ -48,7 +49,7 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 		Messages: []gigachat.Message{
 			{
 				Role:    "system",
-				Content: c.prompt(),
+				Content: c.promptGetSpamPercent(),
 			},
 			{
 				Role:    "user",
@@ -86,15 +87,65 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 		return false, -1, "", errors.New("bad response format")
 	}
 
-	return percent >= 70, percent, strings.TrimSpace(parts[1]), nil
+	isSpam := percent >= 70
+
+	//if !c.check(msgText, percent) {
+	//	log.Println("parse int, bad response format: ", resp.Choices[0].Message.Content)
+	//	return false, -1, "", errors.New("AI stupid")
+	//}
+
+	return isSpam, percent, strings.TrimSpace(parts[1]), nil
 }
 
-func (c *Client) prompt() string {
+func (c *Client) check(srcText string, percent int) bool {
+	err := c.client.AuthWithContext(c.ctx)
+	if err != nil {
+		log.Println(errors.Wrap(err, "giga auth error"))
+		return true
+	}
+
+	req := &gigachat.ChatRequest{
+		Model: "GigaChat",
+		Messages: []gigachat.Message{
+			{
+				Role:    "system",
+				Content: c.promptCheck(percent),
+			},
+			{
+				Role:    "user",
+				Content: srcText,
+			},
+		},
+		Temperature: ptr(0.7),
+		MaxTokens:   ptr[int64](200),
+	}
+
+	resp, err := c.client.ChatWithContext(c.ctx, req)
+	if err != nil {
+		log.Println(errors.Wrap(err, "giga request error"))
+		return true
+	}
+
+	if len(resp.Choices) == 0 {
+		log.Println("response does not contain data")
+		return true
+	}
+
+	return strings.ToLower(resp.Choices[0].Message.Content) == "да"
+}
+
+func (c *Client) promptGetSpamPercent() string {
 	return fmt.Sprintf("Ты модератор IT чата. В ЧАТА ЗАПРЕЩЕН ПОИСК РАБОТЫ И НАЕМ СОТРУДНИКОВ. Зашел новый участник и отправил новое сообщение, произведи анализ сообщения из чата и оцени вероятность того, что оно является спамом.\n" +
 		"Верни число в процентах (от 0 до 100), где 0 означает, что сообщение определенно не является спамом, а 100 означает, что сообщение определенно является спамом.\n" +
 		"Ответ должен соответствовать такому шаблону: <int: вероятность того что это спам>|<string: пояснение почему ты считаешь это спамом>\n" +
 		"например 89|в сообщении фигурирует фраза про криптовалюту и заработок\n" +
+		"перед тем как отправить ответ, ПЕРЕПРОВЕРЬ правильно ли ты понял мою просьбу и верн ли твой ответ.\n" +
 		"Вот сообщение:")
+}
+
+func (c *Client) promptCheck(percent int) string {
+	return fmt.Sprintf("LLM был задан вопрос определить является ли данное сообщение спамом ее ответ %q."+
+		"Верен или нет ее ответ, ответь \"да\" если LLM дала верный ответ и \"нет\" если не верен", lo.If(percent >= 70, "является спамом").Else("не является спамом"))
 }
 
 func ptr[T any](v T) *T {

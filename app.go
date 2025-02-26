@@ -7,6 +7,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
@@ -38,6 +39,7 @@ var (
 const (
 	questionsKey = "questions"
 	lastMsgKey   = "lastMsg"
+	userInfo     = "userInfo"
 )
 
 func init() {
@@ -67,7 +69,7 @@ func Run(ctx_ context.Context) error {
 
 		chatMember := lo.If(update.ChatMember != nil, update.ChatMember).Else(update.MyChatMember)
 
-		if chatMember != nil && chatMember.NewChatMember.Status == "member" && chatMember.OldChatMember.Status != "restricted" {
+		if chatMember != nil && chatMember.NewChatMember.Status == "member" && chatMember.OldChatMember.Status != "restricted" && chatMember.OldChatMember.Status != "administrator" {
 			handlerAddNewMembers(wd, chatMember.Chat, chatMember.NewChatMember.User, &chatMember.From, readConf(wd, chatMember.Chat.ID))
 		}
 
@@ -77,6 +79,7 @@ func Run(ctx_ context.Context) error {
 		}
 
 		chatID := msg.Chat.ID
+		wd.SaveMember(chatID, wd.GetUser(&update))
 
 		// удаляем сообщения о вступлении в группу
 		if len(msg.NewChatMembers) > 0 {
@@ -113,6 +116,75 @@ func Run(ctx_ context.Context) error {
 				wd.SendMsg("Для вас не найден активный чат, видимо вы не добавили бота в чат.", "", chatID, Buttons{})
 			}
 			continue
+		case "russian_roulette":
+			players := []*UserInfo{wd.CastUserToUserinfo(msg.From)}
+
+			var msgID int
+			var author int64
+			buttons := Buttons{
+				{
+					caption: "Продолжить",
+					handler: func(update *tgbotapi.Update, button *Button) bool {
+						from := wd.GetUser(update)
+						if from.ID != author {
+							wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Вопрос не для вас")
+							return false
+						}
+
+						wd.DeleteMessage(chatID, msgID)
+
+						randPlayer := wd.GetRandUser(chatID, msg.From.ID)
+						if randPlayer == nil {
+							wd.SendTTLMsg("Не смог получить оппонента", "", chatID, Buttons{}, time.Second*5)
+							return true
+						}
+
+						players = append(players, randPlayer)
+
+						wd.SendTTLMsg(fmt.Sprintf("Игра против %s.", randPlayer.Name), "", chatID, Buttons{}, time.Second*10)
+						time.Sleep(time.Millisecond * 500)
+
+						id := rand.Intn(len(players))
+						player1, player2 := players[id], players[(id+1)%len(players)]
+
+						if !shot(wd, msg.Chat, player1) {
+							time.Sleep(time.Millisecond * 500)
+							if !shot(wd, msg.Chat, player2) {
+								wd.SendTTLMsg("Ура, никто не умер", "", chatID, Buttons{}, time.Second*5)
+							}
+						}
+
+						return true
+					},
+				},
+				{
+					caption: "Отмена",
+					handler: func(update *tgbotapi.Update, button *Button) bool {
+						from := wd.GetUser(update)
+						if from.ID != author {
+							wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Вопрос не для вас")
+							return false
+						}
+
+						wd.DeleteMessage(chatID, msgID)
+						return true
+					},
+				},
+			}
+
+			m, err := wd.SendMsg("Русская рулетка.\n"+
+				"После нажатия на кнопку «Продолжить» случайным образом выбирается один участник чата. \n"+
+				"Далее происходит два «выстрела»: один в тебя, другой — в выбранного участника. \n"+
+				"Вероятность «попасть под пулю» составляет 1/6 \n"+
+				"Если игрок «получает пулю», ему устанавливается режим только для чтения (RO) на 24 часа (администраторы имеют иммунитет). \n"+
+				"Если после двух «выстрелов» никто не попадает под пулю, игра завершается, и никто не выбывает.", "", chatID, buttons)
+
+			if err == nil {
+				msgID = m.MessageID
+				author = msg.From.ID
+			} else {
+				log.Println(errors.Wrap(err, "sendMsg error"))
+			}
 		case "exampleconf":
 			if f, err := os.CreateTemp("", "*.yaml"); err == nil {
 				f.WriteString(confExample())
@@ -130,6 +202,7 @@ func Run(ctx_ context.Context) error {
 		//continue
 		case "clearLastMsg":
 			wd.deleteLastMsg(msg.From.ID)
+			continue
 		case "allchats":
 			fmt.Println(strings.Join(wd.getAllChats(), "\n"))
 		case "help":
@@ -137,6 +210,33 @@ func Run(ctx_ context.Context) error {
 				"Если нужно заблокировать пользователя тегните сообщения ботом (ответить на сообщение с текстом @%s).", me.UserName)
 			wd.SendMsg(msg, "", chatID, Buttons{})
 			continue
+		case "checkAI":
+			conf := readConf(wd, chatID)
+			authKey := ""
+
+			if conf != nil {
+				authKey = conf.AI.GigaChat.AuthKey
+			}
+
+			split := strings.Split(msg.Text, "::")
+			if len(split) >= 3 {
+				authKey = strings.TrimSpace(split[2])
+			} else if len(split) < 2 {
+				wd.SendMsg("Не корректный формат сообщения", "", chatID, Buttons{})
+				continue
+			}
+
+			if authKey == "" {
+				wd.SendMsg("Не определен authKey для giga chat", "", chatID, Buttons{})
+				continue
+			}
+
+			isSpam, percent, reason, err := wd.gigaClient(authKey).GetSpamPercent(split[1])
+			if err != nil {
+				wd.SendMsg(fmt.Sprintf("Произощла ошибка: %s", err.Error()), "", chatID, Buttons{})
+			} else {
+				wd.SendMsg(fmt.Sprintf("%v, %v, %s", isSpam, percent, reason), "", chatID, Buttons{})
+			}
 		default:
 			if command != "" {
 				fmt.Printf("Команда %s не поддерживается\n", command)
@@ -172,6 +272,21 @@ func Run(ctx_ context.Context) error {
 			}
 		}
 	}
+}
+
+func shot(wd *Telega, chat *tgbotapi.Chat, player *UserInfo) bool {
+	result := lo.If(rand.Intn(2) == 1, "убит").Else("промах")
+	wd.SendTTLMsg(fmt.Sprintf("Выстрел в игрока %s - %s.", player.Name, result), "", chat.ID, Buttons{}, time.Second*10)
+	if result == "убит" {
+		if wd.UserIsAdmin(chat.ChatConfig(), player.ID) {
+			wd.SendTTLMsg(fmt.Sprintf("Игрок %s является администратором, у него иммунитет.", player.Name), "", chat.ID, Buttons{}, time.Second*10)
+		}
+
+		wd.DisableSendMessages(chat.ID, player.ID, time.Hour*24)
+		return true
+	}
+
+	return false
 }
 
 //func processingNewMembers(wd *Telega, update tgbotapi.Update) bool {
@@ -323,7 +438,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 
 	log.Println(fmt.Sprintf("join new user: %s %s (%s), chat: %s", appendedUser.FirstName, appendedUser.LastName, appendedUser.UserName, chat.UserName))
 
-	wd.DisableSendMessages(chat.ID, appendedUser, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
+	wd.DisableSendMessages(chat.ID, appendedUser.ID, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -336,7 +451,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 	}
 	handlerCancel := func(update *tgbotapi.Update, _ *Button) (result bool) {
 		from := wd.GetUser(update)
-		if result = update == nil || from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
+		if result = update == nil || from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from.ID); result {
 			deleteQuestionMessage(questionMessageID)
 			wd.KickChatMember(chat.ID, *appendedUser)
 		}
@@ -348,9 +463,9 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		a := ans // для замыкания
 		handlers = append(handlers, func(update *tgbotapi.Update, currentButton *Button) (result bool) {
 			from := wd.GetUser(update)
-			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from); result {
+			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from.ID); result {
 				if a.Correct {
-					wd.EnableWritingMessages(chat.ID, appendedUser)
+					wd.EnableWritingMessages(chat.ID, appendedUser.ID)
 					deleteQuestionMessage(questionMessageID)
 				} else {
 					deleteQuestionMessage(questionMessageID)

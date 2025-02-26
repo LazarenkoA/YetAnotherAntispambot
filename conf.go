@@ -24,10 +24,11 @@ type Conf struct {
 	Answers    []*answer `yaml:"answers"`
 	CountVoted int       `yaml:"countVoted"`
 	MuteMode   bool      `yaml:"muteMode"` // todo пока не используется
-	AI         *struct {
-		GigaChat *struct {
+	AI         struct {
+		GigaChat struct {
 			ClientID     string `yaml:"clientID"`
 			ClientSecret string `yaml:"clientSecret"`
+			AuthKey      string `yaml:"authKey"`
 		} `yaml:"gigachat"`
 	} `yaml:"ai"`
 }
