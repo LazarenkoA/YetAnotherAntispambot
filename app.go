@@ -24,11 +24,12 @@ type wrapper struct {
 }
 
 var (
-	BotToken   = os.Getenv("BotToken")
-	WebhookURL = os.Getenv("WebhookURL")
-	port       = os.Getenv("PORT")
-	redisaddr  = os.Getenv("REDIS")
-	cert       = os.Getenv("CRT")
+	botToken    = os.Getenv("BotToken")
+	webhookURL  = os.Getenv("WebhookURL")
+	port        = os.Getenv("PORT")
+	redisAddr   = os.Getenv("REDIS")
+	cert        = os.Getenv("CRT")
+	pollingMode = os.Getenv("POLLING_MODE")
 )
 
 var (
@@ -48,8 +49,18 @@ func init() {
 }
 
 func Run(ctx_ context.Context) error {
+	if botToken == "" {
+		return errors.New("в переменных окружения не задан BotToken")
+	}
+	if port == "" {
+		return errors.New("в переменных окружения не задан PORT")
+	}
+	if redisAddr == "" {
+		return errors.New("в переменных окружения не задан адрес redis")
+	}
+
 	wd := new(Telega)
-	wdUpdate, err := wd.New(debug, cert)
+	wdUpdate, err := wd.New(debug, cert, pollingMode == "1")
 	if err != nil {
 		fmt.Println("create telegrtam client error:\n", err.Error())
 		os.Exit(1)
@@ -68,7 +79,6 @@ func Run(ctx_ context.Context) error {
 		}
 
 		chatMember := lo.If(update.ChatMember != nil, update.ChatMember).Else(update.MyChatMember)
-
 		if chatMember != nil && chatMember.NewChatMember.Status == "member" && chatMember.OldChatMember.Status != "restricted" && chatMember.OldChatMember.Status != "administrator" {
 			handlerAddNewMembers(wd, chatMember.Chat, chatMember.NewChatMember.User, &chatMember.From, readConf(wd, chatMember.Chat.ID))
 		}

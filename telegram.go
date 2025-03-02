@@ -57,12 +57,12 @@ type Telega struct {
 	users      map[int64]map[int64]UserInfo
 }
 
-func (t *Telega) New(debug bool, certFilePath string) (result tgbotapi.UpdatesChannel, err error) {
+func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result tgbotapi.UpdatesChannel, err error) {
 	t.callback = map[string]func(tgbotapi.Update) bool{}
 	t.hooks = map[string]func(tgbotapi.Update) bool{}
 	t.users = map[int64]map[int64]UserInfo{}
 
-	t.r, err = new(Redis).Create(redisaddr)
+	t.r, err = new(Redis).Create(redisAddr)
 	if err != nil {
 		return nil, errors.Wrap(err, "create redis")
 	}
@@ -74,58 +74,59 @@ func (t *Telega) New(debug bool, certFilePath string) (result tgbotapi.UpdatesCh
 
 	t.restoreUsersInfo()
 
-	t.bot, err = tgbotapi.NewBotAPI(BotToken)
+	t.bot, err = tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		return nil, err
 	}
-	//if WebhookURL == "" {
-	//	WebhookURL = getngrokWebhookURL() // для отладки получаем через ngrok
-	//	if WebhookURL == "" {
-	//		return nil, errors.New("не удалось получить WebhookURL")
-	//	}
-	//}
-	//
-	//t.bot.Debug = debug
-	//
-	//var wh tgbotapi.WebhookConfig
-	//if certFilePath != "" {
-	//	f, err := os.Open(certFilePath)
-	//	if err != nil {
-	//		return nil, errors.Wrap(err, "open cert error")
-	//	}
-	//
-	//	b, _ := io.ReadAll(f)
-	//	fileBytes := tgbotapi.FileBytes{Bytes: b}
-	//
-	//	wh, err = tgbotapi.NewWebhookWithCert(WebhookURL, fileBytes)
-	//	if err != nil {
-	//		return nil, errors.Wrap(err, "get webhook error")
-	//	}
-	//} else {
-	//	if wh, err = tgbotapi.NewWebhook(WebhookURL); err != nil {
-	//		return nil, errors.Wrap(err, "get webhook error")
-	//	}
-	//}
+	if webhookURL == "" && !pollingMode {
+		// для отладки получаем через ngrok
+		if webhookURL = getngrokWebhookURL(); webhookURL == "" {
+			return nil, errors.New("не удалось получить WebhookURL")
+		}
+	}
 
-	//wh.MaxConnections = 70
-	//wh.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-	//_, err = t.bot.Request(wh)
-	//if err != nil {
-	//	return nil, errors.Wrap(err, "request error")
-	//}
-
+	t.bot.Debug = debug
 	t.httpServer = &http.Server{Addr: ":" + port}
 	go t.httpServer.ListenAndServe()
 
 	fmt.Printf("listen port: %s, debug: %v\n", port, debug)
 
-	_, err = t.bot.Request(&tgbotapi.DeleteWebhookConfig{}) // при использовании полинга
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	u.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-	return t.bot.GetUpdatesChan(u), nil // полинг
+	if !pollingMode {
+		var wh tgbotapi.WebhookConfig
+		if certFilePath != "" {
+			f, err := os.Open(certFilePath)
+			if err != nil {
+				return nil, errors.Wrap(err, "open cert error")
+			}
 
-	return t.bot.ListenForWebhook("/"), nil // вебхук
+			b, _ := io.ReadAll(f)
+			fileBytes := tgbotapi.FileBytes{Bytes: b}
+
+			wh, err = tgbotapi.NewWebhookWithCert(webhookURL, fileBytes)
+			if err != nil {
+				return nil, errors.Wrap(err, "get webhook error")
+			}
+		} else {
+			if wh, err = tgbotapi.NewWebhook(webhookURL); err != nil {
+				return nil, errors.Wrap(err, "get webhook error")
+			}
+		}
+
+		wh.MaxConnections = 70
+		wh.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
+		_, err = t.bot.Request(wh)
+		if err != nil {
+			return nil, errors.Wrap(err, "request error")
+		}
+
+		return t.bot.ListenForWebhook("/"), nil // вебхук
+	} else {
+		_, err = t.bot.Request(&tgbotapi.DeleteWebhookConfig{}) // при использовании полинга
+		u := tgbotapi.NewUpdate(0)
+		u.Timeout = 60
+		u.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
+		return t.bot.GetUpdatesChan(u), nil // полинг
+	}
 }
 
 func (t *Telega) SendTTLMsg(msg string, imgURL string, chatID int64, buttons Buttons, ttl time.Duration) (*tgbotapi.Message, error) {
@@ -359,7 +360,7 @@ func (t *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
 			filePath := path.Join(os.TempDir(), fileName)
 			defer os.Remove(filePath)
 
-			err = t.downloadFile(filePath, file.Link(BotToken))
+			err = t.downloadFile(filePath, file.Link(botToken))
 			if err == nil {
 				if dataByte, err := ioutil.ReadFile(filePath); err == nil {
 					data = string(dataByte)
@@ -723,26 +724,37 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 
 	b := Buttons{}
 	var sentMessage *tgbotapi.Message
-	votedUsers := map[int64]struct{}{}
 
-	userCanVote := func(u *tgbotapi.User) bool {
-		if u.ID == user.ID {
-			return false
-		}
-		if _, ok := votedUsers[u.ID]; ok {
-			return false
-		}
-		votedUsers[u.ID] = struct{}{}
-		return true
+	captionBan, captionRO, captionF := "Бан", "RO на 24ч", "Простить"
+	ban, ro, forgive := map[int64]string{}, map[int64]string{}, map[int64]string{}
+	var author int64
+	var err error
+
+	clear := func(userID int64) {
+		delete(ban, userID)
+		delete(ro, userID)
+		delete(forgive, userID)
 	}
 
-	ban, ro, forgive := []string{}, []string{}, []string{}
-	hBan := func(u *tgbotapi.Update, currentButton *Button) bool {
-		if !userCanVote(u.CallbackQuery.From) {
-			return false
+	renderCaption := func(buttons Buttons) {
+		for _, b := range buttons {
+			if strings.HasPrefix(b.caption, captionBan) {
+				b.caption = fmt.Sprintf("%s (%d/%d)", captionBan, len(ban), countVote)
+			}
+			if strings.HasPrefix(b.caption, captionRO) {
+				b.caption = fmt.Sprintf("%s (%d/%d)", captionRO, len(ro), countVote)
+			}
+			if strings.HasPrefix(b.caption, captionF) {
+				b.caption = fmt.Sprintf("%s (%d/%d)", captionF, len(forgive), countVote)
+			}
 		}
 
-		ban = append(ban, fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName))
+		t.EditButtons(sentMessage, b)
+	}
+
+	hBan := func(u *tgbotapi.Update, currentButton *Button) bool {
+		clear(u.CallbackQuery.From.ID)
+		ban[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ban) >= countVote {
 			t.DeleteMessage(chatID, sourceMsg.MessageID)
 			t.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
@@ -752,16 +764,12 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 			return true
 		}
 
-		currentButton.caption = fmt.Sprintf("Бан (%d/%d)", len(ban), countVote)
-		t.EditButtons(sentMessage, b)
+		renderCaption(b)
 		return false
 	}
 	hRO := func(u *tgbotapi.Update, currentButton *Button) bool {
-		if !userCanVote(u.CallbackQuery.From) {
-			return false
-		}
-
-		ro = append(ro, fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName))
+		clear(u.CallbackQuery.From.ID)
+		ro[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ro) >= countVote {
 			t.DeleteMessage(chatID, sourceMsg.MessageID)
 			t.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
@@ -772,29 +780,26 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 			return true
 		}
 
-		currentButton.caption = fmt.Sprintf("RO на день (%d/%d)", len(ro), countVote)
-		t.EditButtons(sentMessage, b)
+		renderCaption(b)
 		return false
 	}
+
 	b = Buttons{
 		{
-			caption: "Бан",
+			caption: captionBan,
 			handler: hBan,
 		},
 		{
-			caption: "RO на день",
+			caption: captionRO,
 			handler: hRO,
 		},
 		{
-			caption: "Простить",
+			caption: captionF,
 			handler: func(u *tgbotapi.Update, currentButton *Button) bool {
-				if !userCanVote(u.CallbackQuery.From) {
-					return false
-				}
+				clear(u.CallbackQuery.From.ID)
+				forgive[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
+				renderCaption(b)
 
-				forgive = append(forgive, fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName))
-				currentButton.caption = fmt.Sprintf("Простить (%d/%d)", len(forgive), countVote)
-				t.EditButtons(sentMessage, b)
 				if len(forgive) >= countVote {
 					_ = t.DeleteMessage(chatID, sourceMsg.MessageID)
 
@@ -805,9 +810,24 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 				return false
 			},
 		},
+		{
+			caption: "Я передумал",
+			handler: func(update *tgbotapi.Update, button *Button) bool {
+				from := t.GetUser(update)
+				if from.ID != author {
+					t.AnswerCallbackQuery(update.CallbackQuery.ID, "Отменить может только автор")
+					return false
+				}
+
+				t.DeleteMessage(chatID, sourceMsg.MessageID)
+				return true
+			},
+		},
 	}
 
-	sentMessage, _ = t.SendMsg(msg, "", chatID, b)
+	if sentMessage, err = t.SendMsg(msg, "", chatID, b); err == nil {
+		author = sourceMsg.From.ID
+	}
 }
 
 func (t *Telega) kickChatMemberUntil(chatID, userID int64, untilDate int64) error {
