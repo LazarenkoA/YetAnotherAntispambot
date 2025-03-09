@@ -239,14 +239,24 @@ func (t *Telega) MeIsAdmin(chatConfig tgbotapi.ChatConfig) bool {
 	return t.UserIsAdmin(chatConfig, me.ID)
 }
 
+func (t *Telega) getChatAdministrators(chatConfig tgbotapi.ChatConfig) []tgbotapi.ChatMember {
+	admins, _ := t.bot.GetChatAdministrators(tgbotapi.ChatAdministratorsConfig{ChatConfig: chatConfig})
+	return admins
+}
+
 func (t *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool {
-	admins, err := t.bot.GetChatAdministrators(tgbotapi.ChatAdministratorsConfig{ChatConfig: chatConfig})
-	if err != nil || len(admins) == 0 {
-		return false
+	for _, a := range t.getChatAdministrators(chatConfig) {
+		if a.User.ID == userID {
+			return true
+		}
 	}
 
-	for _, a := range admins {
-		if (a.IsAdministrator() || a.IsCreator()) && a.User.ID == userID {
+	return false
+}
+
+func (t *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bool {
+	for _, a := range t.getChatAdministrators(chatConfig) {
+		if a.IsCreator() && a.User.ID == userID {
 			return true
 		}
 	}

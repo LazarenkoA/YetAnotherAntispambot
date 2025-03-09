@@ -129,6 +129,11 @@ func Run(ctx_ context.Context) error {
 		case "russian_roulette":
 			players := []*UserInfo{wd.CastUserToUserinfo(msg.From)}
 
+			if wd.UserIsAdmin(msg.Chat.ChatConfig(), msg.From.ID) && !wd.UserIsCreator(msg.Chat.ChatConfig(), msg.From.ID) {
+				wd.SendTTLMsg("Администраторы не могут играть", "", chatID, Buttons{}, time.Second*5)
+				return nil
+			}
+
 			var msgID int
 			var author int64
 			buttons := Buttons{
