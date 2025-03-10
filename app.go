@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/pkg/errors"
@@ -41,6 +42,7 @@ const (
 	questionsKey = "questions"
 	lastMsgKey   = "lastMsg"
 	userInfo     = "userInfo"
+	killedUsers  = "killedUsers"
 )
 
 func init() {
@@ -200,6 +202,26 @@ func Run(ctx_ context.Context) error {
 			} else {
 				log.Println(errors.Wrap(err, "sendMsg error"))
 			}
+		case "russian_roulette_killed":
+			killed, err := wd.r.Items(killedUsers)
+			if err != nil {
+				log.Println(errors.Wrap(err, "redis read error"))
+				continue
+			}
+
+			viewKilled := make([]string, 0, len(killed))
+			for _, data := range killed {
+				tmp := new(KilledInfo)
+				if err := json.Unmarshal([]byte(data), tmp); err == nil && tmp.UserName != "" {
+					viewKilled = append(viewKilled, tmp.UserName)
+				}
+			}
+
+			if len(viewKilled) > 0 {
+				wd.SendTTLMsg(fmt.Sprintf("Убитые:\n%s", strings.Join(viewKilled, "\n")), "", chatID, Buttons{}, time.Second*10)
+			} else {
+				wd.SendTTLMsg("Убитых нет", "", chatID, Buttons{}, time.Second*10)
+			}
 		case "exampleconf":
 			if f, err := os.CreateTemp("", "*.yaml"); err == nil {
 				f.WriteString(confExample())
@@ -295,8 +317,10 @@ func shot(wd *Telega, chat *tgbotapi.Chat, player *UserInfo) bool {
 	if result == "убит" {
 		if wd.UserIsAdmin(chat.ChatConfig(), player.ID) {
 			wd.SendTTLMsg(fmt.Sprintf("Игрок %s является администратором, у него иммунитет.", player.Name), "", chat.ID, Buttons{}, time.Second*10)
+			return true
 		}
 
+		wd.r.AppendItems(killedUsers, (&KilledInfo{UserName: player.Name, To: time.Now().Add(time.Hour * 24)}).String())
 		wd.DisableSendMessages(chat.ID, player.ID, time.Hour*24)
 		return true
 	}

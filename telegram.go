@@ -43,18 +43,40 @@ const keyActiveMSG = "keyActiveMSG"
 
 type Buttons []*Button
 
+//go:generate mockgen -source=$GOFILE -destination=./mock/mock.go
+type IRedis interface {
+	StringMap(key string) (map[string]string, error)
+	Keys() []string
+	Get(key string) (string, error)
+	SetMap(key string, value map[string]string)
+	Set(key, value string, ttl time.Duration) error
+	Items(key string) ([]string, error)
+	DeleteItems(key, value string) error
+	AppendItems(key, value string)
+	KeyExists(key string) bool
+}
+
 type Telega struct {
 	bot        *tgbotapi.BotAPI
 	callback   map[string]func(tgbotapi.Update) bool
 	hooks      map[string]func(tgbotapi.Update) bool
 	running    int32
-	r          *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
+	r          IRedis //*Redis
+	r2         *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
 	gClient    *giga.Client
 	one        sync.Once
 	lastMsg    map[string]string // для хранения последнего сообщения по пользователю
 	mx         sync.RWMutex
 	httpServer *http.Server
 	users      map[int64]map[int64]UserInfo
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+type KilledInfo struct {
+	UserID   int64
+	UserName string
+	To       time.Time
 }
 
 func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result tgbotapi.UpdatesChannel, err error) {
@@ -72,7 +94,10 @@ func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result 
 	t.lastMsg, _ = t.r.StringMap(lastMsgKey)
 	t.mx.Unlock()
 
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+
 	t.restoreUsersInfo()
+	go t.watchKilledUsers(time.Minute)
 
 	t.bot, err = tgbotapi.NewBotAPI(botToken)
 	if err != nil {
@@ -419,6 +444,10 @@ func (t *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration t
 			CanPinMessages:        allow,
 		},
 	}
+
+	//mem, err := t.bot.GetChatMember(tgbotapi.GetChatMemberConfig{
+	//	ChatConfigWithUser: tgbotapi.ChatConfigWithUser{UserID: userID, ChatID: chatID},
+	//})
 
 	_, err := t.bot.Request(conf)
 	if err != nil {
@@ -969,6 +998,8 @@ func (t *Telega) Shutdown() {
 	t.r.SetMap(lastMsgKey, t.lastMsg)
 	t.mx.RUnlock()
 
+	t.cancel()
+
 	t.bot.StopReceivingUpdates()
 	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
 	err := t.httpServer.Shutdown(ctx)
@@ -991,6 +1022,26 @@ func (t *Telega) restoreUsersInfo() {
 	if err != nil {
 		log.Println(errors.Wrap(err, "restoreUsersInfo error"))
 		return
+	}
+}
+
+func (t *Telega) watchKilledUsers(delay time.Duration) {
+	for {
+		killed, _ := t.r.Items(killedUsers)
+		for _, data := range killed {
+			tmp := new(KilledInfo)
+			if err := json.Unmarshal([]byte(data), tmp); err == nil {
+				if time.Now().After(tmp.To) {
+					t.r.DeleteItems(killedUsers, data)
+				}
+			}
+		}
+
+		select {
+		case <-time.After(delay):
+		case <-t.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -1018,4 +1069,13 @@ func In[T comparable](value T, array []T) bool {
 		}
 	}
 	return false
+}
+
+func (k *KilledInfo) String() string {
+	d, err := json.Marshal(k)
+	if err != nil {
+		return ""
+	}
+
+	return string(d)
 }
