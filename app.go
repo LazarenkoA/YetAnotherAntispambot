@@ -290,7 +290,7 @@ func Run(ctx_ context.Context) error {
 }
 
 func shot(wd *Telega, chat *tgbotapi.Chat, player *UserInfo) bool {
-	result := lo.If(rand.Intn(2) == 1, "убит").Else("промах")
+	result := lo.If(rand.Intn(6) == 1, "убит").Else("промах")
 	wd.SendTTLMsg(fmt.Sprintf("Выстрел в игрока %s - %s.", player.Name, result), "", chat.ID, Buttons{}, time.Second*10)
 	if result == "убит" {
 		if wd.UserIsAdmin(chat.ChatConfig(), player.ID) {
