@@ -2,7 +2,7 @@ module Antispam
 
 go 1.23
 
-replace github.com/paulrzcz/go-gigachat => ../../GIT/go-gigachat
+//replace github.com/paulrzcz/go-gigachat => ../../GIT/go-gigachat
 
 require (
 	github.com/agiledragon/gomonkey/v2 v2.12.0
@@ -11,7 +11,7 @@ require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/golang/mock v1.6.0
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d
-	github.com/paulrzcz/go-gigachat v0.1.1
+	github.com/paulrzcz/go-gigachat v0.1.2
 	github.com/pkg/errors v0.9.1
 	github.com/samber/lo v1.47.0
 	github.com/stretchr/testify v1.9.0

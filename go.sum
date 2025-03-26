@@ -21,6 +21,10 @@ github.com/jarcoal/httpmock v1.3.1/go.mod h1:3yb8rc4BI7TCBhFY8ng0gjuLKJNquuDNiPa
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d h1:VhgPp6v9qf9Agr/56bj7Y/xa04UccTW04VP0Qed4vnQ=
 github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d/go.mod h1:YUTz3bUH2ZwIWBy3CJBeOBEugqcmXREj14T+iG/4k4U=
+github.com/paulrzcz/go-gigachat v0.1.1 h1:3re2osJEd3nkvY9WGXezdbQb56ma2pJO6NAHiUSjAc8=
+github.com/paulrzcz/go-gigachat v0.1.1/go.mod h1:2Ud2KzK2pLBG4KmV3L/zj0jT27qbwYYmP2QK0cuOGK0=
+github.com/paulrzcz/go-gigachat v0.1.2 h1:WtnsHJJAHydRIwa/HHP1pdtlo9W/FN10OUaFsZ177+k=
+github.com/paulrzcz/go-gigachat v0.1.2/go.mod h1:McqGZbec90dE9gnzIveNbJgtOFswRi+j1MxIxx0+FqU=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

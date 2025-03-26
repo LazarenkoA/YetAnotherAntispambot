@@ -270,7 +270,7 @@ func Run(ctx_ context.Context) error {
 
 			isSpam, percent, reason, err := wd.gigaClient(authKey).GetSpamPercent(split[1])
 			if err != nil {
-				wd.SendMsg(fmt.Sprintf("Произощла ошибка: %s", err.Error()), "", chatID, Buttons{})
+				wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 			} else {
 				wd.SendMsg(fmt.Sprintf("%v, %v, %s", isSpam, percent, reason), "", chatID, Buttons{})
 			}
@@ -462,11 +462,15 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 					}
 				}
 			}()
-
-			strChatID := strconv.FormatInt(chat.ID, 10)
-			wd.r.AppendItems(strconv.FormatInt(from.ID, 10), strChatID)
-			wd.r.Set(strChatID, chat.Title, -1)
 		}
+
+		strChatID := strconv.FormatInt(chat.ID, 10)
+		key := strconv.FormatInt(from.ID, 10)
+		wd.r.AppendItems(key, strChatID)
+		wd.r.Set(strChatID, chat.Title, -1)
+
+		log.Printf("бота добавили в чат, chatID: %s (добавил %s)\n", strChatID, key)
+
 		return
 	}
 
