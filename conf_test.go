@@ -20,7 +20,6 @@ func Test_Conf(t *testing.T) {
 	assert.Equal(t, "Я пожалуй пойду", conf.KickCaption)
 	assert.Equal(t, 3, len(conf.Answers))
 	assert.Equal(t, "Что вы видите на картинке?", conf.Question.Txt)
-	assert.Equal(t, "122323", conf.AI.GigaChat.ClientID)
-	assert.Equal(t, "3fffff", conf.AI.GigaChat.ClientSecret)
+	assert.Equal(t, "<ключ можно получить https://developers.sber.ru>", conf.AI.GigaChat.AuthKey)
 	assert.Equal(t, "(?i).*(PORNO|ПОРНО).*", conf.BlockMembers.UserNameRegExp)
 }
