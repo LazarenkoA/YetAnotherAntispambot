@@ -1211,15 +1211,26 @@ func (t *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, 
 		return false
 	}
 
-	var re = regexp.MustCompile(conf.BlockMembers.UserNameRegExp)
-	match := re.FindAllString(appendedUser.String(), -1)
-	if len(match) > 0 {
+	name := appendedUser.FirstName
+	if appendedUser.LastName != "" {
+		name += " " + appendedUser.LastName
+	}
+
+	exp := conf.BlockMembers.UserNameRegExp
+
+	if t.checkRegExp(appendedUser.String(), exp) || t.checkRegExp(name, exp) {
 		t.kickChatMember(chatID, appendedUser.ID)
 		fmt.Printf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String())
 		return true
 	}
 
 	return false
+}
+
+func (t *Telega) checkRegExp(userName string, exp string) bool {
+	var re = regexp.MustCompile(exp)
+	match := re.FindAllString(userName, -1)
+	return len(match) > 0
 }
 
 func (u *UserInfo) String() string {
