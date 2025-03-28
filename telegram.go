@@ -39,7 +39,11 @@ type Button struct {
 	ID    string
 }
 
-const keyActiveMSG = "keyActiveMSG"
+const (
+	keyActiveMSG             = "keyActiveMSG"
+	keyActiveRandomModerator = "keyActiveRandomModerator"
+	promoteChatMember        = "promoteChatMember"
+)
 
 type Buttons []*Button
 
@@ -47,7 +51,9 @@ type Buttons []*Button
 type IRedis interface {
 	StringMap(key string) (map[string]string, error)
 	Keys() []string
+	KeysMask(mask string) []string
 	Get(key string) (string, error)
+	Delete(key string) error
 	SetMap(key string, value map[string]string)
 	Set(key, value string, ttl time.Duration) error
 	Items(key string) ([]string, error)
@@ -113,6 +119,8 @@ func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result 
 	t.bot.Debug = debug
 	t.httpServer = &http.Server{Addr: ":" + port}
 	go t.httpServer.ListenAndServe()
+
+	go t.watchActiveRandomModerator(time.Minute)
 
 	fmt.Printf("listen port: %s, debug: %v\n", port, debug)
 
@@ -277,6 +285,88 @@ func (t *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool 
 	}
 
 	return false
+}
+
+func (t *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.Time) error {
+	params := map[string]string{
+		"chat_id":              strconv.FormatInt(chatID, 10),
+		"user_id":              strconv.FormatInt(user.ID, 10),
+		"can_change_info":      "false",
+		"can_delete_messages":  "true",
+		"can_invite_users":     "true",
+		"can_restrict_members": "true",
+		"can_pin_messages":     "false",
+		"can_promote_members":  "false",
+	}
+
+	_, err := t.bot.MakeRequest(promoteChatMember, params)
+	if err == nil {
+		t.storeNewModerator(chatID, user, deadline)
+	}
+
+	return err
+}
+
+func (t *Telega) RemoveModerator(chatID, userID int64) error {
+	params := map[string]string{
+		"chat_id":              strconv.FormatInt(chatID, 10),
+		"user_id":              strconv.FormatInt(userID, 10),
+		"can_change_info":      "false",
+		"can_delete_messages":  "false",
+		"can_invite_users":     "false",
+		"can_restrict_members": "false",
+		"can_pin_messages":     "false",
+		"can_promote_members":  "false",
+	}
+
+	_, err := t.bot.MakeRequest(promoteChatMember, params)
+	if err == nil {
+		t.r.Delete(keyActiveRandomModerator + params["chat_id"])
+	}
+
+	return err
+}
+
+func (t *Telega) storeNewModerator(chatID int64, user *UserInfo, deadline time.Time) {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+
+	data := map[string]interface{}{
+		"ChatID":   chatID,
+		"User":     user,
+		"Deadline": deadline.Format(time.RFC1123),
+	}
+
+	d, err := json.Marshal(&data)
+	if err != nil {
+		return
+	}
+
+	t.r.Set(keyActiveRandomModerator+strconv.FormatInt(chatID, 10), string(d), -1)
+}
+
+func (t *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
+	t.mx.RLock()
+	defer t.mx.RUnlock()
+
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println("PANIC:", e)
+		}
+	}()
+
+	v, err := t.r.Get(keyActiveRandomModerator + strconv.FormatInt(chatID, 10))
+	if err != nil {
+		return "", time.Time{}
+	}
+
+	data := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(v), &data); err != nil {
+		return "", time.Time{}
+	}
+
+	deadline, _ := time.Parse(time.RFC1123, data["Deadline"].(string))
+	return data["User"].(map[string]interface{})["Name"].(string), deadline
 }
 
 func (t *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bool {
@@ -1025,6 +1115,41 @@ func (t *Telega) restoreUsersInfo() {
 	}
 }
 
+func (t *Telega) watchActiveRandomModerator(delay time.Duration) {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println("PANIC:", e)
+		}
+	}()
+
+	for {
+		for _, k := range t.r.KeysMask(keyActiveRandomModerator + "*") {
+			v, err := t.r.Get(k)
+			if err != nil {
+				continue
+			}
+
+			data := make(map[string]interface{})
+			if err := json.Unmarshal([]byte(v), &data); err != nil {
+				continue
+			}
+
+			deadline, _ := time.Parse(time.RFC1123, data["Deadline"].(string))
+			if time.Now().After(deadline) {
+				ID := data["User"].(map[string]interface{})["ID"].(float64)
+				chatID := data["ChatID"].(float64)
+				t.RemoveModerator(int64(chatID), int64(ID))
+			}
+		}
+
+		select {
+		case <-time.After(delay):
+		case <-t.ctx.Done():
+			return
+		}
+	}
+}
+
 func (t *Telega) watchKilledUsers(delay time.Duration) {
 	for {
 		killed, _ := t.r.Items(killedUsers)
@@ -1073,6 +1198,15 @@ func In[T comparable](value T, array []T) bool {
 
 func (k *KilledInfo) String() string {
 	d, err := json.Marshal(k)
+	if err != nil {
+		return ""
+	}
+
+	return string(d)
+}
+
+func (u *UserInfo) String() string {
+	d, err := json.Marshal(u)
 	if err != nil {
 		return ""
 	}

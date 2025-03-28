@@ -128,6 +128,31 @@ func Run(ctx_ context.Context) error {
 				wd.SendMsg("Для вас не найден активный чат, видимо вы не добавили бота в чат.", "", chatID, Buttons{})
 			}
 			continue
+		case "random_moderator":
+			if userName, deadline := wd.GetActiveRandModerator(chatID); userName != "" {
+				wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s", userName, deadline.Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
+				continue
+			}
+
+			randUser := wd.GetRandUser(chatID, msg.From.ID)
+			if randUser == nil {
+				wd.SendTTLMsg("Не смог получить кандидата", "", chatID, Buttons{}, time.Second*5)
+				continue
+			}
+
+			if wd.UserIsAdmin(msg.Chat.ChatConfig(), randUser.ID) {
+				wd.SendTTLMsg(fmt.Sprintf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name), "", chatID, Buttons{}, time.Second*5)
+				continue
+			}
+			// @DETCKOE_PORNO_DETCKOE_PORNO_j4yx
+
+			deadline := time.Now().Add(time.Hour * 24)
+			if err := wd.AppointModerator(chatID, randUser, deadline); err != nil {
+				wd.SendTTLMsg(fmt.Sprintf("Произошла ошибка: %v", err.Error()), "", chatID, Buttons{}, time.Second*5)
+			} else {
+				wd.SendTTLMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %v", randUser.Name, deadline.Format("02-01-2006 15:04")), "", chatID, Buttons{}, time.Second*15)
+			}
+
 		case "russian_roulette":
 			players := []*UserInfo{wd.CastUserToUserinfo(msg.From)}
 

@@ -45,13 +45,17 @@ func (R *Redis) KeyExists(key string) bool {
 	return exists
 }
 
-func (R *Redis) Keys() []string {
-	keys, err := redis.Strings(R.pool.Get().Do("KEYS", "*"))
+func (R *Redis) KeysMask(mask string) []string {
+	keys, err := redis.Strings(R.pool.Get().Do("KEYS", mask))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
 		fmt.Printf("Redis. Ошибка при выполнении KEYS. %v\n", errors.Wrap(err, "redis error"))
 	}
 
 	return keys
+}
+
+func (R *Redis) Keys() []string {
+	return R.KeysMask("*")
 }
 
 func (R *Redis) Count(key string) int {

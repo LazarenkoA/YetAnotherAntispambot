@@ -19,6 +19,15 @@ func Test_KilledInfo(t *testing.T) {
 	assert.Equal(t, `{"UserID":32323,"UserName":"","To":"2025-03-10T11:46:10Z"}`, k.String())
 }
 
+func Test_UserInfo(t *testing.T) {
+	u := &UserInfo{
+		ID:   32323,
+		Name: "test",
+	}
+
+	assert.Equal(t, `{"ID":32323,"Name":"test"}`, u.String())
+}
+
 func Test_watchKilledUsers(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
