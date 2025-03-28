@@ -144,7 +144,6 @@ func Run(ctx_ context.Context) error {
 				wd.SendTTLMsg(fmt.Sprintf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name), "", chatID, Buttons{}, time.Second*5)
 				continue
 			}
-			// @DETCKOE_PORNO_DETCKOE_PORNO_j4yx
 
 			deadline := time.Now().Add(time.Hour * 24)
 			if err := wd.AppointModerator(chatID, randUser, deadline); err != nil {
@@ -152,7 +151,6 @@ func Run(ctx_ context.Context) error {
 			} else {
 				wd.SendTTLMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %v", randUser.Name, deadline.Format("02-01-2006 15:04")), "", chatID, Buttons{}, time.Second*15)
 			}
-
 		case "russian_roulette":
 			players := []*UserInfo{wd.CastUserToUserinfo(msg.From)}
 
@@ -419,6 +417,7 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 				settings[chat] = confdata
 				wd.r.SetMap(questionsKey, settings)
 
+				wd.SendTTLMsg("👍", "", chatID, Buttons{}, time.Second*10)
 				return true
 			} else {
 				return false
@@ -502,6 +501,10 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 	if conf == nil {
 		log.Printf("для чата %s %s (%s) не определены настройки\n", chat.FirstName, chat.LastName, chat.UserName)
 		return
+	}
+
+	if wd.CheckAndBlockMember(chat.ID, appendedUser, conf) {
+		return // значит уже заблокировали
 	}
 
 	log.Println(fmt.Sprintf("join new user: %s %s (%s), chat: %s", appendedUser.FirstName, appendedUser.LastName, appendedUser.UserName, chat.UserName))

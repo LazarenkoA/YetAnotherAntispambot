@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ const (
 	keyActiveMSG             = "keyActiveMSG"
 	keyActiveRandomModerator = "keyActiveRandomModerator"
 	promoteChatMember        = "promoteChatMember"
+	keyUsingOneTry           = "UsingOneTry"
 )
 
 type Buttons []*Button
@@ -546,13 +548,12 @@ func (t *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration t
 }
 
 func (t *Telega) KickChatMember(chatID int64, user tgbotapi.User) {
-	const key = "UsingOneTry"
 	go func() {
 		userName := t.UserString(&user)
-		users, err := t.r.Items(key)
+		users, err := t.r.Items(keyUsingOneTry)
 		if t.secondAttempt(users, err, strconv.FormatInt(user.ID, 10)) {
 			t.kickChatMember(chatID, user.ID)
-			t.r.DeleteItems(key, strconv.FormatInt(user.ID, 10))
+			t.r.DeleteItems(keyUsingOneTry, strconv.FormatInt(user.ID, 10))
 			return
 		}
 
@@ -1203,6 +1204,22 @@ func (k *KilledInfo) String() string {
 	}
 
 	return string(d)
+}
+
+func (t *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, conf *Conf) bool {
+	if conf.BlockMembers.UserNameRegExp == "" || appendedUser == nil {
+		return false
+	}
+
+	var re = regexp.MustCompile(conf.BlockMembers.UserNameRegExp)
+	match := re.FindAllString(appendedUser.String(), -1)
+	if len(match) > 0 {
+		t.kickChatMember(chatID, appendedUser.ID)
+		fmt.Printf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String())
+		return true
+	}
+
+	return false
 }
 
 func (u *UserInfo) String() string {

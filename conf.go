@@ -20,11 +20,13 @@ type Conf struct {
 	Timeout     int    `yaml:"timeout"`
 	KickCaption string `yaml:"kickCaption"`
 
-	Question   question  `yaml:"question"`
-	Answers    []*answer `yaml:"answers"`
-	CountVoted int       `yaml:"countVoted"`
-	MuteMode   bool      `yaml:"muteMode"` // todo пока не используется
-	AI         struct {
+	Question     question  `yaml:"question"`
+	Answers      []*answer `yaml:"answers"`
+	CountVoted   int       `yaml:"countVoted"`
+	BlockMembers struct {
+		UserNameRegExp string `yaml:"userNameRegExp"`
+	} `yaml:"blockMembers"`
+	AI struct {
 		GigaChat struct {
 			ClientID     string `yaml:"clientID"`
 			ClientSecret string `yaml:"clientSecret"`
@@ -63,6 +65,10 @@ answers:
   - txt: "Лицо"
     correct: true
 countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5
+
+blockMembers: # не обязательная настройка, можно задать регулярное выражение по которому будет баниться никнейм или ФИО. Бан будет сразу при вступлении, без вопроса
+  userNameRegExp: "(?i).*(PORNO|ПОРНО).*" # проверка будет выполняться по полям UserName, FirstName, LastName
+
 ai: # если настройка задана антиспам будет аанализировать первое отправвленое сообщение от пользователя на предмет спам - не спам
   gigachat:
     clientID: 122323
