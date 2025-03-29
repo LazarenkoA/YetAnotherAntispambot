@@ -130,14 +130,33 @@ func Test_GetRandUserByWeight(t *testing.T) {
 		}}
 
 		check := map[int64]float32{}
-		for range 1000 {
+		for range 10000 {
 			user := telega.GetRandUserByWeight(000, 0)
 			check[user.ID]++
 		}
 
-		assert.Equal(t, float64(30), roundToTens(float64(check[111]/1000)*100))
-		assert.Equal(t, float64(30), roundToTens(float64(check[222]/1000)*100))
-		assert.Equal(t, float64(30), roundToTens(float64(check[333]/1000)*100))
+		assert.Equal(t, float64(30), roundToTens(float64(check[111]/10000)*100))
+		assert.Equal(t, float64(30), roundToTens(float64(check[222]/10000)*100))
+		assert.Equal(t, float64(30), roundToTens(float64(check[333]/10000)*100))
+	})
+	t.Run("test3", func(t *testing.T) {
+		telega := &Telega{users: map[int64]map[int64]UserInfo{
+			000: {
+				111: UserInfo{ID: 111, Weight: 0},
+				222: UserInfo{ID: 222, Weight: 0},
+				333: UserInfo{ID: 333, Weight: 0},
+			},
+		}}
+
+		check := map[int64]float32{}
+		for range 1000 {
+			user := telega.GetRandUserByWeight(000, 111)
+			check[user.ID]++
+		}
+
+		assert.Equal(t, float64(0), roundToTens(float64(check[111]/1000)*100))
+		assert.Equal(t, float64(50), roundToTens(float64(check[222]/1000)*100))
+		assert.Equal(t, float64(50), roundToTens(float64(check[333]/1000)*100))
 	})
 }
 
