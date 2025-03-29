@@ -27,7 +27,7 @@ func Test_UserInfo(t *testing.T) {
 		Name: "test",
 	}
 
-	assert.Equal(t, `{"ID":32323,"Name":"test"}`, u.String())
+	assert.Equal(t, `{"ID":32323,"Name":"test","Weight":0}`, u.String())
 }
 
 func Test_watchKilledUsers(t *testing.T) {
