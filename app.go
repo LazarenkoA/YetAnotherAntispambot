@@ -134,7 +134,7 @@ func Run(ctx_ context.Context) error {
 				continue
 			}
 
-			randUser := wd.GetRandUser(chatID, msg.From.ID)
+			randUser := wd.GetRandUserByWeight(chatID, msg.From.ID)
 			if randUser == nil {
 				wd.SendTTLMsg("Не смог получить кандидата", "", chatID, Buttons{}, time.Second*5)
 				continue

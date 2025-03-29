@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,8 +27,9 @@ import (
 )
 
 type UserInfo struct {
-	ID   int64
-	Name string
+	ID     int64
+	Name   string
+	Weight int64
 }
 
 type Button struct {
@@ -1000,17 +1002,22 @@ func (t *Telega) DeleteMessage(chatID int64, messageID int) error {
 }
 
 func (t *Telega) SaveMember(chatID int64, user *tgbotapi.User) {
+	t.mx.Lock()
+	defer t.mx.Unlock()
+
 	if _, ok := t.users[chatID]; !ok {
 		t.users[chatID] = map[int64]UserInfo{
 			user.ID: {
-				ID:   user.ID,
-				Name: t.UserString(user),
+				ID:     user.ID,
+				Name:   t.UserString(user),
+				Weight: 1,
 			},
 		}
 	} else {
 		t.users[chatID][user.ID] = UserInfo{
-			ID:   user.ID,
-			Name: t.UserString(user),
+			ID:     user.ID,
+			Name:   t.UserString(user),
+			Weight: t.users[chatID][user.ID].Weight + 1,
 		}
 	}
 }
@@ -1034,22 +1041,62 @@ func (t *Telega) CastUserToUserinfo(tUser *tgbotapi.User) *UserInfo {
 	return &UserInfo{ID: tUser.ID, Name: t.UserString(tUser)}
 }
 
+func (t *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *UserInfo) {
+	t.mx.RLock()
+	defer t.mx.RUnlock()
+
+	usersByChat, ok := t.users[chatID]
+	if !ok || len(usersByChat) == 0 {
+		return nil
+	}
+
+	tmp := make([]UserInfo, 0, len(usersByChat))
+	prefixSums := make([]int64, len(usersByChat))
+
+	// перекладываем в слайс, тут же находим сумму всех элементов
+	for k, v := range usersByChat {
+		if excludeUserID > 0 && k == excludeUserID {
+			continue
+		}
+
+		tmp = append(tmp, v)
+	}
+
+	prefixSums[0] = tmp[0].Weight
+	for i := 1; i < len(tmp); i++ {
+		prefixSums[i] = prefixSums[i-1] + tmp[i].Weight
+	}
+
+	last := int(prefixSums[len(prefixSums)-1])
+	if last == 0 {
+		return &tmp[rand.Intn(len(tmp))] // если веса не заданы, обычный рандом
+	}
+
+	randomValue := rand.Intn(last)
+	for i, v := range prefixSums {
+		if randomValue < int(v) {
+			return &tmp[i]
+		}
+	}
+
+	return nil
+}
+
 func (t *Telega) GetRandUser(chatID, excludeUserID int64) (result *UserInfo) {
 	t.mx.RLock()
 	defer t.mx.RUnlock()
 
-	for k, v := range t.users {
-		if k != chatID {
+	usersByChat, ok := t.users[chatID]
+	if !ok {
+		return nil
+	}
+
+	for k, v := range usersByChat {
+		if excludeUserID > 0 && k == excludeUserID {
 			continue
 		}
 
-		for k2, v2 := range v {
-			if k2 == excludeUserID {
-				continue
-			}
-
-			return &v2
-		}
+		return &v
 	}
 
 	return
