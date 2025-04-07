@@ -6,7 +6,7 @@ import (
 	"github.com/paulrzcz/go-gigachat"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 )
@@ -44,6 +44,8 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 		return false, -1, "", errors.New("message is not defined")
 	}
 
+	logger := slog.Default().With("name", "GetSpamPercent")
+
 	req := &gigachat.ChatRequest{
 		Model: "GigaChat",
 		Messages: []gigachat.Message{
@@ -71,67 +73,18 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 
 	parts := strings.Split(resp.Choices[0].Message.Content, "|")
 	if len(parts) != 2 {
-		log.Println("bad response format, parts not 2: ", resp.Choices[0].Message.Content)
+		logger.Error("bad response format, parts not 2", "content", resp.Choices[0].Message.Content)
 		return false, -1, "", errors.New("bad response format")
 	}
 
-	//solution, errSolution := strconv.ParseBool(strings.TrimSpace(parts[0]))
-	//if err != nil {
-	//	log.Println("parse bool, bad response format: ", resp.Choices[0].Message.Content)
-	//	return false, -1, "", errors.New("bad response format")
-	//}
-
 	percent, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 	if err != nil {
-		log.Println("parse int, bad response format: ", resp.Choices[0].Message.Content)
+		logger.Error("parse int, bad response format", "content", resp.Choices[0].Message.Content)
 		return false, -1, "", errors.New("bad response format")
 	}
 
 	isSpam := percent >= 70
-
-	//if !c.check(msgText, percent) {
-	//	log.Println("parse int, bad response format: ", resp.Choices[0].Message.Content)
-	//	return false, -1, "", errors.New("AI stupid")
-	//}
-
 	return isSpam, percent, strings.TrimSpace(parts[1]), nil
-}
-
-func (c *Client) check(srcText string, percent int) bool {
-	err := c.client.AuthWithContext(c.ctx)
-	if err != nil {
-		log.Println(errors.Wrap(err, "giga auth error"))
-		return true
-	}
-
-	req := &gigachat.ChatRequest{
-		Model: "GigaChat",
-		Messages: []gigachat.Message{
-			{
-				Role:    "system",
-				Content: c.promptCheck(percent),
-			},
-			{
-				Role:    "user",
-				Content: srcText,
-			},
-		},
-		Temperature: ptr(0.7),
-		MaxTokens:   ptr[int64](200),
-	}
-
-	resp, err := c.client.ChatWithContext(c.ctx, req)
-	if err != nil {
-		log.Println(errors.Wrap(err, "giga request error"))
-		return true
-	}
-
-	if len(resp.Choices) == 0 {
-		log.Println("response does not contain data")
-		return true
-	}
-
-	return strings.ToLower(resp.Choices[0].Message.Content) == "да"
 }
 
 func (c *Client) promptGetSpamPercent() string {

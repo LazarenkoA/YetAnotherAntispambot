@@ -5,7 +5,6 @@ import (
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/pkg/errors"
-	"log"
 	"math/rand"
 	"os"
 	"strconv"
@@ -40,6 +39,7 @@ func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 	if err != nil {
 		wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 	} else {
+		wd.logger.Info(split[1], "solution", isSpam, "percent", percent, "reason", reason)
 		wd.SendMsg(fmt.Sprintf("%v, %v, %s", isSpam, percent, reason), "", chatID, Buttons{})
 	}
 }
@@ -81,23 +81,23 @@ func (wd *Telega) start(chatID int64, msg *tgbotapi.Message) {
 	wd.SendMsg(txt, "", chatID, Buttons{})
 }
 
-func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline time.Time) {
+func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline time.Time) error {
 	randUser := wd.GetRandUserByWeight(chatID, msg.From.ID)
 	if randUser == nil {
-		wd.SendTTLMsg("Не смог получить кандидата", "", chatID, Buttons{}, time.Second*5)
-		return
+		return errors.New("не смог получить кандидата")
 	}
 
 	if wd.UserIsAdmin(msg.Chat.ChatConfig(), randUser.ID) {
-		wd.SendTTLMsg(fmt.Sprintf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name), "", chatID, Buttons{}, time.Second*5)
-		return
+		return fmt.Errorf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name)
 	}
 
 	if err := wd.AppointModerator(chatID, randUser, deadline); err != nil {
-		wd.SendTTLMsg(fmt.Sprintf("Произошла ошибка: %v", err.Error()), "", chatID, Buttons{}, time.Second*5)
+		return err
 	} else {
 		wd.SendMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %v", randUser.Name, deadline.Format("02-01-2006 15:04")), "", chatID, Buttons{})
 	}
+
+	return nil
 }
 
 func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message) {
@@ -109,17 +109,25 @@ func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message)
 	if wd.randomModeratorMX.TryLock() {
 		defer wd.randomModeratorMX.Unlock()
 	} else {
+		wd.logger.Warn("выбор модератора уже запущен")
 		return
 	}
 
+	delay := (time.Minute * 1440) + 1 // 24ч +1 минута
+	tick := time.NewTicker(delay)
+
 	for {
-		deadline := time.Now().Add(time.Hour * 24)
-		wd.randomModerator(chatID, msg, deadline)
+		if err := wd.randomModerator(chatID, msg, time.Now().Add(time.Hour*24)); err != nil {
+			wd.SendTTLMsg(errors.Wrap(err, "произошла ошибка").Error(), "", chatID, Buttons{}, time.Second*5)
+			tick.Reset(time.Minute)
+		} else {
+			tick.Reset(delay)
+		}
 
 		select {
 		case <-wd.ctx.Done():
 			return
-		case <-time.After((time.Minute * 1440) + 1): // 24ч +1 минута
+		case <-tick.C:
 		}
 	}
 }
@@ -127,7 +135,7 @@ func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message)
 func (wd *Telega) russianRouletteKilled(chatID int64) {
 	killed, err := wd.r.Items(killedUsers)
 	if err != nil {
-		log.Println(errors.Wrap(err, "redis read error"))
+		wd.logger.Error(errors.Wrap(err, "redis read error").Error())
 		return
 	}
 
@@ -218,6 +226,6 @@ func (wd *Telega) russianRoulette(chatID int64, msg *tgbotapi.Message) {
 		msgID = m.MessageID
 		author = msg.From.ID
 	} else {
-		log.Println(errors.Wrap(err, "sendMsg error"))
+		wd.logger.Error(errors.Wrap(err, "sendMsg error").Error())
 	}
 }

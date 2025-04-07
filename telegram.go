@@ -1,6 +1,7 @@
 package app
 
 import (
+	"Antispam/db"
 	"Antispam/giga"
 	"bytes"
 	"context"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
@@ -71,8 +73,7 @@ type Telega struct {
 	callback          map[string]func(tgbotapi.Update) bool
 	hooks             map[string]func(tgbotapi.Update) bool
 	running           int32
-	r                 IRedis //*Redis
-	r2                *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
+	r                 IRedis
 	gClient           *giga.Client
 	one               sync.Once
 	lastMsg           map[string]string // для хранения последнего сообщения по пользователю
@@ -82,6 +83,7 @@ type Telega struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	randomModeratorMX sync.Mutex
+	logger            *slog.Logger
 }
 
 type KilledInfo struct {
@@ -94,8 +96,9 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result
 	wd.callback = map[string]func(tgbotapi.Update) bool{}
 	wd.hooks = map[string]func(tgbotapi.Update) bool{}
 	wd.users = map[int64]map[int64]UserInfo{}
+	wd.logger = slog.Default().With("name", "telegram")
 
-	wd.r, err = new(Redis).Create(redisAddr)
+	wd.r, err = new(db.Redis).Create(redisAddr)
 	if err != nil {
 		return nil, errors.Wrap(err, "create redis")
 	}
@@ -127,7 +130,7 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result
 
 	go wd.watchActiveRandomModerator(time.Minute)
 
-	fmt.Printf("listen port: %s, debug: %v\n", port, debug)
+	wd.logger.Info(fmt.Sprintf("listen port: %s, debug: %v", port, debug))
 
 	if !pollingMode {
 		var wh tgbotapi.WebhookConfig
@@ -356,7 +359,7 @@ func (wd *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
 
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println("PANIC:", e)
+			wd.logger.Error(fmt.Sprintf("PANIC: %v", e))
 		}
 	}()
 
@@ -546,7 +549,7 @@ func (wd *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration 
 
 	_, err := wd.bot.Request(conf)
 	if err != nil {
-		log.Printf("При изменении прав пользователя произошла ошибка: %v\n", err)
+		wd.logger.Error(fmt.Sprintf("При изменении прав пользователя произошла ошибка: %v\n", err))
 	}
 }
 
@@ -598,13 +601,15 @@ func (wd *Telega) deleteAllLastMsg() {
 	wd.lastMsg = map[string]string{}
 }
 
-func (wd *Telega) IsSPAM(userID int64, msg string, conf *Conf) (bool, string) {
+func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
 	if conf == nil {
 		return false, ""
 	}
 
 	wd.mx.Lock()
 	defer wd.mx.Unlock()
+
+	logger := wd.logger.With("userID", userID, "chatID", chatID)
 
 	// если есть последнее сообщение тогда выходим, не проверяем
 	if _, ok := wd.lastMsg[strconv.FormatInt(userID, 10)]; ok {
@@ -614,16 +619,12 @@ func (wd *Telega) IsSPAM(userID int64, msg string, conf *Conf) (bool, string) {
 	c := wd.gigaClient(conf.AI.GigaChat.AuthKey)
 	s, p, r, err := c.GetSpamPercent(strings.ReplaceAll(msg, "\n", " "))
 	if err != nil {
-		log.Println(errors.Wrap(err, "getSpamPercent error"))
+		logger.Error(errors.Wrap(err, "getSpamPercent error").Error())
 		return false, ""
 	}
 
-	log.Printf("msg: %s\n"+
-		"\tsolution: %v\n"+
-		"\tpercent: %d\n"+
-		"\treason: %s\n\n", msg, s, p, r)
-
-	if !s && err == nil {
+	logger.Info(msg, "solution", s, "percent", p, "reason", r)
+	if !s {
 		wd.lastMsg[strconv.FormatInt(userID, 10)] = msg
 	}
 
@@ -639,14 +640,14 @@ func (wd *Telega) gigaClient(authKey string) *giga.Client {
 }
 
 func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
-	log.Printf("chatID: %d, удален спам от пользователя %s\n", chatID, user.String())
+	wd.logger.Info(fmt.Sprintf("chatID: %d, удален спам от пользователя %s\n", chatID, user.String()))
 
 	wd.DeleteMessage(chatID, messageID)
 
 	usrName := wd.UserString(user)
 	msg, err := wd.SendMsg(fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), "", chatID, Buttons{})
 	if err != nil {
-		log.Println("ERROR:", errors.Wrap(err, "send msg error"))
+		wd.logger.Info(errors.Wrap(err, "send msg error").Error())
 		return
 	}
 
@@ -896,7 +897,7 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
 			wd.kickChatMember(chatID, user.ID)
 
-			log.Println("Ban -", ban)
+			wd.logger.Debug(fmt.Sprintf("Ban - %v", ban))
 			return true
 		}
 
@@ -912,7 +913,7 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 
 			wd.DisableSendMessages(chatID, user.ID, time.Hour*24)
 
-			log.Println("RO -", ro)
+			wd.logger.Debug(fmt.Sprintf("RO - %v", ro))
 			return true
 		}
 
@@ -939,7 +940,7 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 				if len(forgive) >= countVote {
 					_ = wd.DeleteMessage(chatID, sourceMsg.MessageID)
 
-					log.Println("forgive -", forgive)
+					wd.logger.Debug(fmt.Sprintf("forgive - %v", forgive))
 					return true
 				}
 
@@ -1050,6 +1051,8 @@ func (wd *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *User
 	defer wd.mx.RUnlock()
 
 	usersByChat, ok := wd.users[chatID]
+	wd.logger.WithGroup("GetRandUserByWeight").With("chatID", chatID).Debug(fmt.Sprintf("users len - %d", len(usersByChat)))
+
 	if !ok || len(usersByChat) == 0 {
 		return nil
 	}
@@ -1146,7 +1149,7 @@ func (wd *Telega) Shutdown() {
 	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
 	err := wd.httpServer.Shutdown(ctx)
 	if err != nil {
-		log.Println("http server shutdown error:", err.Error())
+		wd.logger.Error(errors.Wrap(err, "http server shutdown error").Error())
 	}
 }
 
@@ -1156,13 +1159,13 @@ func (wd *Telega) restoreUsersInfo() {
 
 	data, err := wd.r.Get(userInfo)
 	if err != nil {
-		log.Println(errors.Wrap(err, "restoreUsersInfo error"))
+		wd.logger.Error(errors.Wrap(err, "restoreUsersInfo error").Error())
 		return
 	}
 
 	err = json.Unmarshal([]byte(data), &wd.users)
 	if err != nil {
-		log.Println(errors.Wrap(err, "restoreUsersInfo error"))
+		wd.logger.Error(errors.Wrap(err, "restoreUsersInfo error").Error())
 		return
 	}
 }
@@ -1170,7 +1173,7 @@ func (wd *Telega) restoreUsersInfo() {
 func (wd *Telega) watchActiveRandomModerator(delay time.Duration) {
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println("PANIC:", e)
+			wd.logger.Error(fmt.Sprintf("PANIC: %v", e))
 		}
 	}()
 
@@ -1228,13 +1231,13 @@ func (wd *Telega) storeUsersInfo() {
 
 	data, err := json.Marshal(wd.users)
 	if err != nil {
-		log.Println(errors.Wrap(err, "storeUsersInfo error"))
+		wd.logger.Error(errors.Wrap(err, "storeUsersInfo error").Error())
 		return
 	}
 
 	err = wd.r.Set(userInfo, string(data), -1)
 	if err != nil {
-		log.Println(errors.Wrap(err, "storeUsersInfo error"))
+		wd.logger.Error(errors.Wrap(err, "storeUsersInfo error").Error())
 		return
 	}
 }
@@ -1271,7 +1274,7 @@ func (wd *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User,
 
 	if wd.checkRegExp(appendedUser.String(), exp) || wd.checkRegExp(name, exp) {
 		wd.kickChatMember(chatID, appendedUser.ID)
-		fmt.Printf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String())
+		wd.logger.Info(fmt.Sprintf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String()))
 		return true
 	}
 

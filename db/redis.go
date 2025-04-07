@@ -1,19 +1,22 @@
-package app
+package db
 
 import (
-	"fmt"
 	"github.com/pkg/errors"
+	"log/slog"
 	"time"
 
 	"github.com/garyburd/redigo/redis"
 )
 
 type Redis struct {
-	pool *redis.Pool
+	pool   *redis.Pool
+	logger *slog.Logger
 }
 
 func (R *Redis) Create(stringConnect string) (*Redis, error) {
 	R.initPool(stringConnect)
+	R.logger = slog.Default().With("name", "redis")
+
 	return R, R.pool.TestOnBorrow(R.pool.Get(), time.Now())
 }
 
@@ -39,7 +42,7 @@ func (R *Redis) initPool(stringConnect string) {
 func (R *Redis) KeyExists(key string) bool {
 	exists, err := redis.Bool(R.pool.Get().Do("EXISTS", key))
 	if err != nil {
-		fmt.Printf("Redis. Ошибка при выполнении KeyExists\n%v\n", errors.Wrap(err, "redis error"))
+		R.logger.Error("ошибка при выполнении KeyExists", "error", err)
 	}
 
 	return exists
@@ -48,7 +51,7 @@ func (R *Redis) KeyExists(key string) bool {
 func (R *Redis) KeysMask(mask string) []string {
 	keys, err := redis.Strings(R.pool.Get().Do("KEYS", mask))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("Redis. Ошибка при выполнении KEYS. %v\n", errors.Wrap(err, "redis error"))
+		R.logger.Error("ошибка при выполнении KEYS", "error", err)
 	}
 
 	return keys
@@ -61,7 +64,7 @@ func (R *Redis) Keys() []string {
 func (R *Redis) Count(key string) int {
 	count, err := redis.Int(R.pool.Get().Do("SCARD", key))
 	if err != nil {
-		fmt.Println("Redis. Ошибка при выполнении Count")
+		R.logger.Error("ошибка при выполнении Count", "error", err)
 	}
 	return count
 }
@@ -69,7 +72,7 @@ func (R *Redis) Count(key string) int {
 func (R *Redis) Delete(key string) error {
 	_, err := R.pool.Get().Do("DEL", key)
 	if err != nil {
-		fmt.Printf("%v (Delete key: %s)\n", errors.Wrap(err, "redis error"), key)
+		R.logger.Error("ошибка при выполнении Delete", "key", key, "error", err)
 	}
 	return err
 }
@@ -84,7 +87,7 @@ func (R *Redis) Set(key, value string, ttl time.Duration) error {
 
 	_, err := R.pool.Get().Do("SET", param...)
 	if err != nil {
-		fmt.Printf("%v (Set key: %s, value: %s)\n", errors.Wrap(err, "redis error"), key, value)
+		R.logger.Error("ошибка при выполнении Set", "key", key, "value", value, "error", err)
 	}
 	return err
 }
@@ -92,7 +95,7 @@ func (R *Redis) Set(key, value string, ttl time.Duration) error {
 func (R *Redis) Get(key string) (string, error) {
 	v, err := redis.String(R.pool.Get().Do("GET", key))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (Get key: %s)\n", errors.Wrap(err, "redis error"), key)
+		R.logger.Error("ошибка при выполнении Get", "key", key, "error", err)
 	}
 	return v, err
 }
@@ -100,7 +103,7 @@ func (R *Redis) Get(key string) (string, error) {
 func (R *Redis) DeleteItems(key, value string) error {
 	_, err := R.pool.Get().Do("SREM", key, value)
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (DeleteItems key: %s, value: %s)\n", errors.Wrap(err, "redis error"), key, value)
+		R.logger.Error("ошибка при выполнении DeleteItems", "key", key, "error", err)
 	}
 	return err
 }
@@ -111,7 +114,7 @@ func (R *Redis) Items(key string) ([]string, error) {
 
 	items, err := redis.Strings(R.pool.Get().Do("SMEMBERS", key))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (Items key: %s)\n", errors.Wrap(err, "redis error"), key)
+		R.logger.Error("ошибка при выполнении Items", "key", key, "error", err)
 	}
 	return items, err
 }
@@ -119,7 +122,7 @@ func (R *Redis) Items(key string) ([]string, error) {
 func (R *Redis) LPOP(key string) string {
 	item, err := redis.String(R.pool.Get().Do("LPOP", key))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (LPOP key: %s)\n", errors.Wrap(err, "redis error"), key)
+		R.logger.Error("ошибка при выполнении LPOP", "key", key, "error", err)
 	}
 	return item
 }
@@ -127,7 +130,7 @@ func (R *Redis) LPOP(key string) string {
 func (R *Redis) RPUSH(key, value string) error {
 	_, err := R.pool.Get().Do("RPUSH", key, value)
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (RPUSH key: %s, value: %v)\n", errors.Wrap(err, "redis error"), key, value)
+		R.logger.Error("ошибка при выполнении RPUSH", "key", key, "value", value, "error", err)
 	}
 	return err
 }
@@ -136,7 +139,7 @@ func (R *Redis) RPUSH(key, value string) error {
 func (R *Redis) AppendItems(key, value string) {
 	_, err := R.pool.Get().Do("SADD", key, value)
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (AppendItems key: %s, value: %s)\n", errors.Wrap(err, "redis error"), key, value)
+		R.logger.Error("ошибка при выполнении AppendItems", "key", key, "value", value, "error", err)
 	}
 }
 
@@ -144,7 +147,7 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 	for k, v := range value {
 		_, err := R.pool.Get().Do("HSET", key, k, v)
 		if err != nil {
-			fmt.Printf("%v (SetMap key: %s, value: %v)\n", errors.Wrap(err, "redis error"), key, value)
+			R.logger.Error("ошибка при выполнении SetMap", "key", key, "value", value, "error", err)
 			break
 		}
 	}
@@ -154,7 +157,7 @@ func (R *Redis) SetMap(key string, value map[string]string) {
 func (R *Redis) StringMap(key string) (map[string]string, error) {
 	value, err := redis.StringMap(R.pool.Get().Do("HGETALL", key))
 	if err != nil && !errors.Is(err, redis.ErrNil) {
-		fmt.Printf("%v (StringMap key: %s)\n", errors.Wrap(err, "redis error"), key)
+		R.logger.Error("ошибка при выполнении StringMap", "key", key, "error", err)
 	}
 	return value, err
 }

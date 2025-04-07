@@ -6,7 +6,7 @@ import (
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
-	"log"
+	"log/slog"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -60,10 +60,14 @@ func Run(ctx_ context.Context) error {
 		return errors.New("в переменных окружения не задан адрес redis")
 	}
 
+	InitDefaultLogger()
+
+	logger := slog.Default()
+
 	wd := new(Telega)
 	wdUpdate, err := wd.New(debug, cert, pollingMode == "1")
 	if err != nil {
-		fmt.Println("create telegrtam client error:\n", err.Error())
+		logger.Error(errors.Wrap(err, "create telegrtam client error").Error())
 		os.Exit(1)
 	}
 
@@ -132,7 +136,7 @@ func Run(ctx_ context.Context) error {
 			wd.deleteLastMsg(msg.From.ID)
 			continue
 		case "allchats":
-			fmt.Println(strings.Join(wd.getAllChats(), "\n"))
+			logger.Info(strings.Join(wd.getAllChats(), "\n"))
 			continue
 		case "help":
 			wd.help(chatID)
@@ -142,7 +146,7 @@ func Run(ctx_ context.Context) error {
 			continue
 		default:
 			if command != "" {
-				fmt.Printf("Команда %s не поддерживается\n", command)
+				logger.Info(fmt.Sprintf("Команда %s не поддерживается\n", command))
 				continue
 			} else {
 				key := strconv.FormatInt(chatID, 10)
@@ -169,7 +173,7 @@ func Run(ctx_ context.Context) error {
 
 		user := msg.From
 		if txt := msg.Text; txt != "" {
-			if s, r := wd.IsSPAM(user.ID, txt, readConf(wd, chatID)); s {
+			if s, r := wd.IsSPAM(user.ID, chatID, txt, readConf(wd, chatID)); s {
 				time.Sleep(time.Millisecond * 500) // небольшая задержка, иногда сообщение в клиенте может отрисовываться после удаления
 				wd.deleteSpam(user, r, msg.MessageID, chatID)
 			}
@@ -286,9 +290,12 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 }
 
 func getSettings(wd *Telega, key string, chatID int64) bool {
+	logger := wd.logger.With("chatID", chatID)
+
 	settings, err := wrap(wd.r.StringMap(questionsKey)).result()
 	if err != nil {
-		log.Println(fmt.Errorf("ошибка получения конфига из redis: %w", err))
+		logger.Error(fmt.Errorf("ошибка получения конфига из redis: %w", err).Error())
+		return false
 	}
 
 	if s, ok := settings[key]; ok {
@@ -303,8 +310,10 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 			}
 		}
 	} else {
+		logger.Warn(fmt.Sprintf("в настройках отсутствует ключ %s", key))
 		return false
 	}
+
 	return true
 }
 
@@ -336,13 +345,13 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		wd.r.AppendItems(key, strChatID)
 		wd.r.Set(strChatID, chat.Title, -1)
 
-		log.Printf("бота добавили в чат, chatID: %s (добавил %s)\n", strChatID, key)
+		wd.logger.Info(fmt.Sprintf("бота добавили в чат, chatID: %s (добавил %s)", strChatID, key))
 
 		return
 	}
 
 	if conf == nil {
-		log.Printf("для чата %s %s (%s) не определены настройки\n", chat.FirstName, chat.LastName, chat.UserName)
+		wd.logger.Error(fmt.Sprintf("для чата %s %s (%s) не определены настройки", chat.FirstName, chat.LastName, chat.UserName))
 		return
 	}
 
@@ -350,7 +359,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		return // значит уже заблокировали
 	}
 
-	log.Println(fmt.Sprintf("join new user: %s %s (%s), chat: %s", appendedUser.FirstName, appendedUser.LastName, appendedUser.UserName, chat.UserName))
+	wd.logger.With("chatID", chat.ID).Info(fmt.Sprintf("join new user: %s (%d) to chat: %s", appendedUser.String(), appendedUser.ID, chat.UserName))
 
 	wd.DisableSendMessages(chat.ID, appendedUser.ID, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 
@@ -425,7 +434,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		"\n\n%s", member, timeout, conf.Question.Txt)
 
 	if message, err := wd.SendMsg(txt, conf.Question.Img, chat.ID, b); err != nil {
-		log.Println(errors.Wrap(err, "SendMsg error"))
+		wd.logger.Error(errors.Wrap(err, "SendMsg error").Error())
 		return
 	} else {
 		questionMessageID = message.MessageID
@@ -438,7 +447,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Second * time.Duration(timeout)):
-			log.Printf("the user %d did not answer the question during the timeout\n", appendedUser.ID)
+			wd.logger.With("chatID", chat.ID).Info(fmt.Sprintf("the user %d did not answer the question during the timeout\n", appendedUser.ID))
 			deleteQuestionMessage(questionMessageID)
 			wd.KickChatMember(chat.ID, *appendedUser)
 		}
@@ -448,7 +457,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 func readConf(wd *Telega, chatID int64) *Conf {
 	settings, err := wrap(wd.r.StringMap(questionsKey)).result() // todo переделать на мапу в памяти как lastMsg
 	if err != nil {
-		log.Println(errors.Wrap(err, "read settings error"))
+		wd.logger.Error(errors.Wrap(err, "read settings error").Error())
 		return nil
 	}
 
@@ -477,7 +486,7 @@ func shutdown(wd *Telega, cancel context.CancelFunc) {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 
-	log.Println("Shutting down")
+	wd.logger.Info("shutting down")
 	wd.Shutdown()
 	cancel()
 }

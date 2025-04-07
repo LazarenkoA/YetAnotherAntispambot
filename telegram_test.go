@@ -6,6 +6,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"log/slog"
 	"math"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func Test_watchKilledUsers(t *testing.T) {
 
 	mockRedis := mock_app.NewMockIRedis(c)
 
-	telega := &Telega{ctx: ctx, cancel: cancel, r: mockRedis}
+	telega := &Telega{ctx: ctx, cancel: cancel, r: mockRedis, logger: slog.Default()}
 
 	tmp := (&KilledInfo{UserName: "test", To: time.Now().Add(time.Hour * -2)}).String()
 	mockRedis.EXPECT().Items(killedUsers).Return([]string{tmp}, nil)
@@ -48,7 +49,7 @@ func Test_watchKilledUsers(t *testing.T) {
 }
 
 func Test_SaveMember(t *testing.T) {
-	telega := &Telega{users: map[int64]map[int64]UserInfo{}}
+	telega := &Telega{users: map[int64]map[int64]UserInfo{}, logger: slog.Default()}
 
 	telega.SaveMember(111, &tgbotapi.User{
 		ID:       21212,
@@ -80,7 +81,7 @@ func Test_SaveMember(t *testing.T) {
 func Test_GetRandUser(t *testing.T) {
 	telega := &Telega{users: map[int64]map[int64]UserInfo{
 		000: {111: UserInfo{ID: 111}},
-	}}
+	}, logger: slog.Default()}
 
 	v := telega.GetRandUser(111, 0)
 	assert.Nil(t, v)
@@ -108,17 +109,17 @@ func Test_GetRandUserByWeight(t *testing.T) {
 				222: UserInfo{ID: 222, Weight: 1},
 				333: UserInfo{ID: 333, Weight: 2},
 			},
-		}}
+		}, logger: slog.Default()}
 
 		check := map[int64]float32{}
-		for range 1000 {
+		for range 10000 {
 			user := telega.GetRandUserByWeight(000, 0)
 			check[user.ID]++
 		}
 
-		assert.Equal(t, float64(0), roundToTens(float64(check[111]/1000)*100))
-		assert.Equal(t, float64(30), roundToTens(float64(check[222]/1000)*100))
-		assert.Equal(t, float64(70), roundToTens(float64(check[333]/1000)*100))
+		assert.Equal(t, float64(0), roundToTens(float64(check[111]/100000)*100))
+		assert.Equal(t, float64(30), roundToTens(float64(check[222]/10000)*100))
+		assert.Equal(t, float64(70), roundToTens(float64(check[333]/10000)*100))
 	})
 	t.Run("test2", func(t *testing.T) {
 		telega := &Telega{users: map[int64]map[int64]UserInfo{
@@ -127,7 +128,7 @@ func Test_GetRandUserByWeight(t *testing.T) {
 				222: UserInfo{ID: 222, Weight: 0},
 				333: UserInfo{ID: 333, Weight: 0},
 			},
-		}}
+		}, logger: slog.Default()}
 
 		check := map[int64]float32{}
 		for range 10000 {
@@ -146,17 +147,17 @@ func Test_GetRandUserByWeight(t *testing.T) {
 				222: UserInfo{ID: 222, Weight: 0},
 				333: UserInfo{ID: 333, Weight: 0},
 			},
-		}}
+		}, logger: slog.Default()}
 
 		check := map[int64]float32{}
-		for range 1000 {
+		for range 10000 {
 			user := telega.GetRandUserByWeight(000, 111)
 			check[user.ID]++
 		}
 
-		assert.Equal(t, float64(0), roundToTens(float64(check[111]/1000)*100))
-		assert.Equal(t, float64(50), roundToTens(float64(check[222]/1000)*100))
-		assert.Equal(t, float64(50), roundToTens(float64(check[333]/1000)*100))
+		assert.Equal(t, float64(0), roundToTens(float64(check[111]/10000)*100))
+		assert.Equal(t, float64(50), roundToTens(float64(check[222]/10000)*100))
+		assert.Equal(t, float64(50), roundToTens(float64(check[333]/10000)*100))
 	})
 }
 
