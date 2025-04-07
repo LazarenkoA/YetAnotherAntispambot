@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/pkg/errors"
@@ -112,191 +111,35 @@ func Run(ctx_ context.Context) error {
 		command := wd.GetMessage(update).Command()
 		switch command {
 		case "start":
-			txt := fmt.Sprintf("Привет %s %s\n"+
-				"Что бы начать пользоваться ботом нужно выполнить следующие действия:\n"+
-				"1. Добавить бота в нужную группу\n"+
-				"2. Выдать боту админские права\n"+
-				"3. Выполнить в боте команду /configuration, выбрать чат и загрузить (отправить файл) конфиг. "+
-				"Пример конфига можно скачать выполнив команду /exampleconf", msg.From.FirstName, msg.From.LastName)
-			wd.SendMsg(txt, "", chatID, Buttons{})
+			wd.start(chatID, msg)
 			continue
 		case "configuration":
-			key := strconv.FormatInt(wd.GetMessage(update).From.ID, 10)
-			if wd.r.KeyExists(key) {
-				configuration(wd, update, chatID)
-			} else {
-				wd.SendMsg("Для вас не найден активный чат, видимо вы не добавили бота в чат.", "", chatID, Buttons{})
-			}
+			wd.configuration(chatID, update)
 			continue
 		case "random_moderator":
-			if userName, deadline := wd.GetActiveRandModerator(chatID); userName != "" {
-				wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s", userName, deadline.Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
-				continue
-			}
-
-			randUser := wd.GetRandUserByWeight(chatID, msg.From.ID)
-			if randUser == nil {
-				wd.SendTTLMsg("Не смог получить кандидата", "", chatID, Buttons{}, time.Second*5)
-				continue
-			}
-
-			if wd.UserIsAdmin(msg.Chat.ChatConfig(), randUser.ID) {
-				wd.SendTTLMsg(fmt.Sprintf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name), "", chatID, Buttons{}, time.Second*5)
-				continue
-			}
-
-			deadline := time.Now().Add(time.Hour * 24)
-			if err := wd.AppointModerator(chatID, randUser, deadline); err != nil {
-				wd.SendTTLMsg(fmt.Sprintf("Произошла ошибка: %v", err.Error()), "", chatID, Buttons{}, time.Second*5)
-			} else {
-				wd.SendTTLMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %v", randUser.Name, deadline.Format("02-01-2006 15:04")), "", chatID, Buttons{}, time.Second*15)
-			}
-		case "russian_roulette":
-			players := []*UserInfo{wd.CastUserToUserinfo(msg.From)}
-
-			if wd.UserIsAdmin(msg.Chat.ChatConfig(), msg.From.ID) && !wd.UserIsCreator(msg.Chat.ChatConfig(), msg.From.ID) {
-				wd.SendTTLMsg("Администраторы не могут играть", "", chatID, Buttons{}, time.Second*5)
-				return nil
-			}
-
-			var msgID int
-			var author int64
-			buttons := Buttons{
-				{
-					caption: "Продолжить",
-					handler: func(update *tgbotapi.Update, button *Button) bool {
-						from := wd.GetUser(update)
-						if from.ID != author {
-							wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Вопрос не для вас")
-							return false
-						}
-
-						wd.DeleteMessage(chatID, msgID)
-
-						randPlayer := wd.GetRandUser(chatID, msg.From.ID)
-						if randPlayer == nil {
-							wd.SendTTLMsg("Не смог получить оппонента", "", chatID, Buttons{}, time.Second*5)
-							return true
-						}
-
-						players = append(players, randPlayer)
-
-						wd.SendTTLMsg(fmt.Sprintf("Игра против %s.", randPlayer.Name), "", chatID, Buttons{}, time.Second*10)
-						time.Sleep(time.Millisecond * 500)
-
-						id := rand.Intn(len(players))
-						player1, player2 := players[id], players[(id+1)%len(players)]
-
-						if !shot(wd, msg.Chat, player1) {
-							time.Sleep(time.Millisecond * 500)
-							if !shot(wd, msg.Chat, player2) {
-								wd.SendTTLMsg("Ура, никто не умер", "", chatID, Buttons{}, time.Second*5)
-							}
-						}
-
-						return true
-					},
-				},
-				{
-					caption: "Отмена",
-					handler: func(update *tgbotapi.Update, button *Button) bool {
-						from := wd.GetUser(update)
-						if from.ID != author {
-							wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Вопрос не для вас")
-							return false
-						}
-
-						wd.DeleteMessage(chatID, msgID)
-						return true
-					},
-				},
-			}
-
-			m, err := wd.SendMsg("Русская рулетка.\n"+
-				"После нажатия на кнопку «Продолжить» случайным образом выбирается один участник чата. \n"+
-				"Далее происходит два «выстрела»: один в тебя, другой — в выбранного участника. \n"+
-				"Вероятность «попасть под пулю» составляет 1/6 \n"+
-				"Если игрок «получает пулю», ему устанавливается режим только для чтения (RO) на 24 часа (администраторы имеют иммунитет). \n"+
-				"Если после двух «выстрелов» никто не попадает под пулю, игра завершается, и никто не выбывает.", "", chatID, buttons)
-
-			if err == nil {
-				msgID = m.MessageID
-				author = msg.From.ID
-			} else {
-				log.Println(errors.Wrap(err, "sendMsg error"))
-			}
-		case "russian_roulette_killed":
-			killed, err := wd.r.Items(killedUsers)
-			if err != nil {
-				log.Println(errors.Wrap(err, "redis read error"))
-				continue
-			}
-
-			viewKilled := make([]string, 0, len(killed))
-			for _, data := range killed {
-				tmp := new(KilledInfo)
-				if err := json.Unmarshal([]byte(data), tmp); err == nil && tmp.UserName != "" {
-					viewKilled = append(viewKilled, tmp.UserName)
-				}
-			}
-
-			if len(viewKilled) > 0 {
-				wd.SendTTLMsg(fmt.Sprintf("Убитые:\n%s", strings.Join(viewKilled, "\n")), "", chatID, Buttons{}, time.Second*10)
-			} else {
-				wd.SendTTLMsg("Убитых нет", "", chatID, Buttons{}, time.Second*10)
-			}
-		case "exampleconf":
-			if f, err := os.CreateTemp("", "*.yaml"); err == nil {
-				f.WriteString(confExample())
-				f.Close()
-
-				wd.SendFile(chatID, f.Name())
-				os.RemoveAll(f.Name())
-			}
+			wd.randomModeratorAutoExtend(chatID, msg)
 			continue
-		//case "test":
-		// для теста
-		//msg.NewChatMembers = &[]tgbotapi.User{
-		//	{ID: 22, FirstName: "test", LastName: "test", UserName: "test", LanguageCode: "", IsBot: false},
-		//}
-		//continue
+		case "russian_roulette":
+			wd.russianRoulette(chatID, msg)
+			continue
+		case "russian_roulette_killed":
+			wd.russianRouletteKilled(chatID)
+			continue
+		case "exampleconf":
+			wd.exampleConf(chatID)
+			continue
 		case "clearLastMsg":
 			wd.deleteLastMsg(msg.From.ID)
 			continue
 		case "allchats":
 			fmt.Println(strings.Join(wd.getAllChats(), "\n"))
+			continue
 		case "help":
-			msg := fmt.Sprintf("Антиспам для групп, при входе нового участника в группу бот задает вопрос, если ответа нет, участник блокируется.\n"+
-				"Если нужно заблокировать пользователя тегните сообщения ботом (ответить на сообщение с текстом @%s).", me.UserName)
-			wd.SendMsg(msg, "", chatID, Buttons{})
+			wd.help(chatID)
 			continue
 		case "checkAI":
-			conf := readConf(wd, chatID)
-			authKey := ""
-
-			if conf != nil {
-				authKey = conf.AI.GigaChat.AuthKey
-			}
-
-			split := strings.Split(msg.Text, "::")
-			if len(split) >= 3 {
-				authKey = strings.TrimSpace(split[2])
-			} else if len(split) < 2 {
-				wd.SendMsg("Не корректный формат сообщения", "", chatID, Buttons{})
-				continue
-			}
-
-			if authKey == "" {
-				wd.SendMsg("Не определен authKey для giga chat", "", chatID, Buttons{})
-				continue
-			}
-
-			isSpam, percent, reason, err := wd.gigaClient(authKey).GetSpamPercent(split[1])
-			if err != nil {
-				wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
-			} else {
-				wd.SendMsg(fmt.Sprintf("%v, %v, %s", isSpam, percent, reason), "", chatID, Buttons{})
-			}
+			wd.checkAI(chatID, msg)
+			continue
 		default:
 			if command != "" {
 				fmt.Printf("Команда %s не поддерживается\n", command)
@@ -595,7 +438,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Second * time.Duration(timeout)):
-			log.Println("timeout has ended")
+			log.Printf("the user %d did not answer the question during the timeout\n", appendedUser.ID)
 			deleteQuestionMessage(questionMessageID)
 			wd.KickChatMember(chat.ID, *appendedUser)
 		}

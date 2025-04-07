@@ -67,20 +67,21 @@ type IRedis interface {
 }
 
 type Telega struct {
-	bot        *tgbotapi.BotAPI
-	callback   map[string]func(tgbotapi.Update) bool
-	hooks      map[string]func(tgbotapi.Update) bool
-	running    int32
-	r          IRedis //*Redis
-	r2         *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
-	gClient    *giga.Client
-	one        sync.Once
-	lastMsg    map[string]string // для хранения последнего сообщения по пользователю
-	mx         sync.RWMutex
-	httpServer *http.Server
-	users      map[int64]map[int64]UserInfo
-	ctx        context.Context
-	cancel     context.CancelFunc
+	bot               *tgbotapi.BotAPI
+	callback          map[string]func(tgbotapi.Update) bool
+	hooks             map[string]func(tgbotapi.Update) bool
+	running           int32
+	r                 IRedis //*Redis
+	r2                *Redis // todo: не красиво, взаимодействие с базой надо через адаптер
+	gClient           *giga.Client
+	one               sync.Once
+	lastMsg           map[string]string // для хранения последнего сообщения по пользователю
+	mx                sync.RWMutex
+	httpServer        *http.Server
+	users             map[int64]map[int64]UserInfo
+	ctx               context.Context
+	cancel            context.CancelFunc
+	randomModeratorMX sync.Mutex
 }
 
 type KilledInfo struct {
@@ -89,27 +90,27 @@ type KilledInfo struct {
 	To       time.Time
 }
 
-func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result tgbotapi.UpdatesChannel, err error) {
-	t.callback = map[string]func(tgbotapi.Update) bool{}
-	t.hooks = map[string]func(tgbotapi.Update) bool{}
-	t.users = map[int64]map[int64]UserInfo{}
+func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result tgbotapi.UpdatesChannel, err error) {
+	wd.callback = map[string]func(tgbotapi.Update) bool{}
+	wd.hooks = map[string]func(tgbotapi.Update) bool{}
+	wd.users = map[int64]map[int64]UserInfo{}
 
-	t.r, err = new(Redis).Create(redisAddr)
+	wd.r, err = new(Redis).Create(redisAddr)
 	if err != nil {
 		return nil, errors.Wrap(err, "create redis")
 	}
 
 	// восстанавливаем данные из БД
-	t.mx.Lock()
-	t.lastMsg, _ = t.r.StringMap(lastMsgKey)
-	t.mx.Unlock()
+	wd.mx.Lock()
+	wd.lastMsg, _ = wd.r.StringMap(lastMsgKey)
+	wd.mx.Unlock()
 
-	t.ctx, t.cancel = context.WithCancel(context.Background())
+	wd.ctx, wd.cancel = context.WithCancel(context.Background())
 
-	t.restoreUsersInfo()
-	go t.watchKilledUsers(time.Minute)
+	wd.restoreUsersInfo()
+	go wd.watchKilledUsers(time.Minute)
 
-	t.bot, err = tgbotapi.NewBotAPI(botToken)
+	wd.bot, err = tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +121,11 @@ func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result 
 		}
 	}
 
-	t.bot.Debug = debug
-	t.httpServer = &http.Server{Addr: ":" + port}
-	go t.httpServer.ListenAndServe()
+	wd.bot.Debug = debug
+	wd.httpServer = &http.Server{Addr: ":" + port}
+	go wd.httpServer.ListenAndServe()
 
-	go t.watchActiveRandomModerator(time.Minute)
+	go wd.watchActiveRandomModerator(time.Minute)
 
 	fmt.Printf("listen port: %s, debug: %v\n", port, debug)
 
@@ -151,35 +152,35 @@ func (t *Telega) New(debug bool, certFilePath string, pollingMode bool) (result 
 
 		wh.MaxConnections = 70
 		wh.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-		_, err = t.bot.Request(wh)
+		_, err = wd.bot.Request(wh)
 		if err != nil {
 			return nil, errors.Wrap(err, "request error")
 		}
 
-		return t.bot.ListenForWebhook("/"), nil // вебхук
+		return wd.bot.ListenForWebhook("/"), nil // вебхук
 	} else {
-		_, err = t.bot.Request(&tgbotapi.DeleteWebhookConfig{}) // при использовании полинга
+		_, err = wd.bot.Request(&tgbotapi.DeleteWebhookConfig{}) // при использовании полинга
 		u := tgbotapi.NewUpdate(0)
 		u.Timeout = 60
 		u.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-		return t.bot.GetUpdatesChan(u), nil // полинг
+		return wd.bot.GetUpdatesChan(u), nil // полинг
 	}
 }
 
-func (t *Telega) SendTTLMsg(msg string, imgURL string, chatID int64, buttons Buttons, ttl time.Duration) (*tgbotapi.Message, error) {
-	if m, err := t.SendMsg(msg, imgURL, chatID, buttons); err != nil {
+func (wd *Telega) SendTTLMsg(msg string, imgURL string, chatID int64, buttons Buttons, ttl time.Duration) (*tgbotapi.Message, error) {
+	if m, err := wd.SendMsg(msg, imgURL, chatID, buttons); err != nil {
 		return nil, err
 	} else {
 		go func() {
 			time.Sleep(ttl)
-			t.DeleteMessage(chatID, m.MessageID)
+			wd.DeleteMessage(chatID, m.MessageID)
 		}()
 
 		return m, nil
 	}
 }
 
-func (t *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (*tgbotapi.Message, error) {
+func (wd *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (*tgbotapi.Message, error) {
 	if imgURL != "" {
 		if path, err := downloadFile(imgURL); err == nil {
 			defer os.RemoveAll(path)
@@ -187,22 +188,22 @@ func (t *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Button
 			newmsg := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(path))
 			newmsg.Caption = msg
 			newmsg.ParseMode = "HTML"
-			return t.createButtonsAndSend(&newmsg, buttons)
+			return wd.createButtonsAndSend(&newmsg, buttons)
 		} else {
 			return &tgbotapi.Message{}, err
 		}
 	} else {
 		newmsg := tgbotapi.NewMessage(chatID, msg)
 		newmsg.ParseMode = "HTML"
-		return t.createButtonsAndSend(&newmsg, buttons)
+		return wd.createButtonsAndSend(&newmsg, buttons)
 	}
 }
 
-func (t *Telega) getAllChats() []string {
+func (wd *Telega) getAllChats() []string {
 	var result []string
 
-	for _, key := range t.r.Keys() {
-		if title, err := t.r.Get(key); err == nil {
+	for _, key := range wd.r.Keys() {
+		if title, err := wd.r.Get(key); err == nil {
 			result = append(result, title)
 		}
 	}
@@ -210,7 +211,7 @@ func (t *Telega) getAllChats() []string {
 	return result
 }
 
-func (t *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (*tgbotapi.Message, error) {
+func (wd *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (*tgbotapi.Message, error) {
 	if imgURL != "" {
 		if path, err := downloadFile(imgURL); err == nil {
 			defer os.RemoveAll(path)
@@ -219,7 +220,7 @@ func (t *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Butto
 			newmsg.ReplyToMessageID = parrentMessageID
 			newmsg.Caption = msg
 			newmsg.ParseMode = "HTML"
-			return t.createButtonsAndSend(&newmsg, buttons)
+			return wd.createButtonsAndSend(&newmsg, buttons)
 		} else {
 			return &tgbotapi.Message{}, err
 		}
@@ -227,23 +228,23 @@ func (t *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Butto
 		newmsg := tgbotapi.NewMessage(chatID, msg)
 		newmsg.ReplyToMessageID = parrentMessageID
 		newmsg.ParseMode = "HTML"
-		return t.createButtonsAndSend(&newmsg, buttons)
+		return wd.createButtonsAndSend(&newmsg, buttons)
 	}
 }
 
-func (t *Telega) SendFile(chatID int64, filepath string) error {
+func (wd *Telega) SendFile(chatID int64, filepath string) error {
 	msg := tgbotapi.NewDocument(chatID, tgbotapi.FilePath(filepath))
-	_, err := t.bot.Send(msg)
+	_, err := wd.bot.Send(msg)
 	return err
 }
 
-func (t *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (*tgbotapi.Message, error) {
+func (wd *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (*tgbotapi.Message, error) {
 	// if _, ok := msg.(tgbotapi.Fileable); ok {
 	//	fmt.Println(1)
 	// }
 
 	if len(buttons) > 0 {
-		buttons.createButtons(msg, t.callback, func() {}, 2)
+		buttons.createButtons(msg, wd.callback, func() {}, 2)
 	}
 
 	//timerExist := false
@@ -253,7 +254,7 @@ func (t *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (
 	//	}
 	//}
 
-	m, err := t.bot.Send(msg)
+	m, err := wd.bot.Send(msg)
 
 	// Отключен таймер на кнопке т.к. при большом количествет присоединившихся пользователях не будет работать
 	// if timerExist {
@@ -263,26 +264,26 @@ func (t *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (
 	return &m, err
 }
 
-func (t *Telega) EditMsg(msg *tgbotapi.Message, txt string, buttons Buttons) *tgbotapi.Message {
+func (wd *Telega) EditMsg(msg *tgbotapi.Message, txt string, buttons Buttons) *tgbotapi.Message {
 	editmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, txt)
 	editmsg.ParseMode = "HTML"
-	m, _ := t.createButtonsAndSend(&editmsg, buttons)
+	m, _ := wd.createButtonsAndSend(&editmsg, buttons)
 
 	return m
 }
 
-func (t *Telega) MeIsAdmin(chatConfig tgbotapi.ChatConfig) bool {
-	me, _ := t.bot.GetMe()
-	return t.UserIsAdmin(chatConfig, me.ID)
+func (wd *Telega) MeIsAdmin(chatConfig tgbotapi.ChatConfig) bool {
+	me, _ := wd.bot.GetMe()
+	return wd.UserIsAdmin(chatConfig, me.ID)
 }
 
-func (t *Telega) getChatAdministrators(chatConfig tgbotapi.ChatConfig) []tgbotapi.ChatMember {
-	admins, _ := t.bot.GetChatAdministrators(tgbotapi.ChatAdministratorsConfig{ChatConfig: chatConfig})
+func (wd *Telega) getChatAdministrators(chatConfig tgbotapi.ChatConfig) []tgbotapi.ChatMember {
+	admins, _ := wd.bot.GetChatAdministrators(tgbotapi.ChatAdministratorsConfig{ChatConfig: chatConfig})
 	return admins
 }
 
-func (t *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool {
-	for _, a := range t.getChatAdministrators(chatConfig) {
+func (wd *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool {
+	for _, a := range wd.getChatAdministrators(chatConfig) {
 		if a.User.ID == userID {
 			return true
 		}
@@ -291,7 +292,7 @@ func (t *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool 
 	return false
 }
 
-func (t *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.Time) error {
+func (wd *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.Time) error {
 	params := map[string]string{
 		"chat_id":              strconv.FormatInt(chatID, 10),
 		"user_id":              strconv.FormatInt(user.ID, 10),
@@ -303,15 +304,15 @@ func (t *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.Ti
 		"can_promote_members":  "false",
 	}
 
-	_, err := t.bot.MakeRequest(promoteChatMember, params)
+	_, err := wd.bot.MakeRequest(promoteChatMember, params)
 	if err == nil {
-		t.storeNewModerator(chatID, user, deadline)
+		wd.storeNewModerator(chatID, user, deadline)
 	}
 
 	return err
 }
 
-func (t *Telega) RemoveModerator(chatID, userID int64) error {
+func (wd *Telega) RemoveModerator(chatID, userID int64) error {
 	params := map[string]string{
 		"chat_id":              strconv.FormatInt(chatID, 10),
 		"user_id":              strconv.FormatInt(userID, 10),
@@ -323,17 +324,17 @@ func (t *Telega) RemoveModerator(chatID, userID int64) error {
 		"can_promote_members":  "false",
 	}
 
-	_, err := t.bot.MakeRequest(promoteChatMember, params)
+	_, err := wd.bot.MakeRequest(promoteChatMember, params)
 	if err == nil {
-		t.r.Delete(keyActiveRandomModerator + params["chat_id"])
+		wd.r.Delete(keyActiveRandomModerator + params["chat_id"])
 	}
 
 	return err
 }
 
-func (t *Telega) storeNewModerator(chatID int64, user *UserInfo, deadline time.Time) {
-	t.mx.Lock()
-	defer t.mx.Unlock()
+func (wd *Telega) storeNewModerator(chatID int64, user *UserInfo, deadline time.Time) {
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
 	data := map[string]interface{}{
 		"ChatID":   chatID,
@@ -346,12 +347,12 @@ func (t *Telega) storeNewModerator(chatID int64, user *UserInfo, deadline time.T
 		return
 	}
 
-	t.r.Set(keyActiveRandomModerator+strconv.FormatInt(chatID, 10), string(d), -1)
+	wd.r.Set(keyActiveRandomModerator+strconv.FormatInt(chatID, 10), string(d), -1)
 }
 
-func (t *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
-	t.mx.RLock()
-	defer t.mx.RUnlock()
+func (wd *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
+	wd.mx.RLock()
+	defer wd.mx.RUnlock()
 
 	defer func() {
 		if e := recover(); e != nil {
@@ -359,7 +360,7 @@ func (t *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
 		}
 	}()
 
-	v, err := t.r.Get(keyActiveRandomModerator + strconv.FormatInt(chatID, 10))
+	v, err := wd.r.Get(keyActiveRandomModerator + strconv.FormatInt(chatID, 10))
 	if err != nil {
 		return "", time.Time{}
 	}
@@ -373,8 +374,8 @@ func (t *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
 	return data["User"].(map[string]interface{})["Name"].(string), deadline
 }
 
-func (t *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bool {
-	for _, a := range t.getChatAdministrators(chatConfig) {
+func (wd *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bool {
+	for _, a := range wd.getChatAdministrators(chatConfig) {
 		if a.IsCreator() && a.User.ID == userID {
 			return true
 		}
@@ -383,8 +384,8 @@ func (t *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) boo
 	return false
 }
 
-func (t *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context, cancel context.CancelFunc) {
-	tick := time.NewTicker(t.getDelay())
+func (wd *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context, cancel context.CancelFunc) {
+	tick := time.NewTicker(wd.getDelay())
 	defer func() {
 		tick.Stop()
 	}()
@@ -408,14 +409,14 @@ B:
 				}
 			}
 
-			t.EditButtons(&msg, buttons)
+			wd.EditButtons(&msg, buttons)
 
 			if button != nil {
 				if button.handler != nil {
 					button.handler(nil, button)
 				}
 
-				delete(t.callback, button.ID)
+				delete(wd.callback, button.ID)
 				break B
 			}
 
@@ -424,16 +425,16 @@ B:
 	}
 }
 
-func (t *Telega) CallbackQuery(update tgbotapi.Update) bool {
+func (wd *Telega) CallbackQuery(update tgbotapi.Update) bool {
 	if update.CallbackQuery == nil || update.CallbackQuery.Message == nil {
 		return false
 	}
 
-	if call, ok := t.callback[update.CallbackQuery.Data]; ok {
+	if call, ok := wd.callback[update.CallbackQuery.Data]; ok {
 		if call != nil {
 			if call(update) {
-				t.DeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
-				delete(t.callback, update.CallbackQuery.Data)
+				wd.DeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
+				delete(wd.callback, update.CallbackQuery.Data)
 			}
 		}
 	}
@@ -441,7 +442,7 @@ func (t *Telega) CallbackQuery(update tgbotapi.Update) bool {
 	return true
 }
 
-func (t *Telega) downloadFile(filepath, url string) error {
+func (wd *Telega) downloadFile(filepath, url string) error {
 	resp, err := new(http.Client).Get(url)
 	if err != nil {
 		return err
@@ -458,7 +459,7 @@ func (t *Telega) downloadFile(filepath, url string) error {
 	return err
 }
 
-func (t *Telega) GetUser(update *tgbotapi.Update) *tgbotapi.User {
+func (wd *Telega) GetUser(update *tgbotapi.Update) *tgbotapi.User {
 	if update == nil {
 		return nil
 	} else if update.Message != nil {
@@ -470,7 +471,7 @@ func (t *Telega) GetUser(update *tgbotapi.Update) *tgbotapi.User {
 	}
 }
 
-func (t *Telega) GetMessage(update tgbotapi.Update) *tgbotapi.Message {
+func (wd *Telega) GetMessage(update tgbotapi.Update) *tgbotapi.Message {
 	if update.Message != nil {
 		return update.Message
 	} else if update.CallbackQuery != nil {
@@ -480,16 +481,16 @@ func (t *Telega) GetMessage(update tgbotapi.Update) *tgbotapi.Message {
 	}
 }
 
-func (t *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
+func (wd *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
 	// message.Chat.ID
 	downloadFilebyID := func(FileID string) {
 		var file tgbotapi.File
-		if file, err = t.bot.GetFile(tgbotapi.FileConfig{FileID}); err == nil {
+		if file, err = wd.bot.GetFile(tgbotapi.FileConfig{FileID}); err == nil {
 			_, fileName := path.Split(file.FilePath)
 			filePath := path.Join(os.TempDir(), fileName)
 			defer os.Remove(filePath)
 
-			err = t.downloadFile(filePath, file.Link(botToken))
+			err = wd.downloadFile(filePath, file.Link(botToken))
 			if err == nil {
 				if dataByte, err := ioutil.ReadFile(filePath); err == nil {
 					data = string(dataByte)
@@ -507,15 +508,15 @@ func (t *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
 	return data, err
 }
 
-func (t *Telega) DisableSendMessages(chatID int64, userID int64, duration time.Duration) {
-	t.restrictChatMemberConfig(chatID, userID, duration, false)
+func (wd *Telega) DisableSendMessages(chatID int64, userID int64, duration time.Duration) {
+	wd.restrictChatMemberConfig(chatID, userID, duration, false)
 }
 
-func (t *Telega) EnableWritingMessages(chatID int64, userID int64) {
-	t.restrictChatMemberConfig(chatID, userID, 0, true)
+func (wd *Telega) EnableWritingMessages(chatID int64, userID int64) {
+	wd.restrictChatMemberConfig(chatID, userID, 0, true)
 }
 
-func (t *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration time.Duration, allow bool) {
+func (wd *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration time.Duration, allow bool) {
 	var untilDate int64
 	if duration > 0 {
 		untilDate = time.Now().Add(duration).Unix()
@@ -543,19 +544,19 @@ func (t *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration t
 	//	ChatConfigWithUser: tgbotapi.ChatConfigWithUser{UserID: userID, ChatID: chatID},
 	//})
 
-	_, err := t.bot.Request(conf)
+	_, err := wd.bot.Request(conf)
 	if err != nil {
 		log.Printf("При изменении прав пользователя произошла ошибка: %v\n", err)
 	}
 }
 
-func (t *Telega) KickChatMember(chatID int64, user tgbotapi.User) {
+func (wd *Telega) KickChatMember(chatID int64, user tgbotapi.User) {
 	go func() {
-		userName := t.UserString(&user)
-		users, err := t.r.Items(keyUsingOneTry)
-		if t.secondAttempt(users, err, strconv.FormatInt(user.ID, 10)) {
-			t.kickChatMember(chatID, user.ID)
-			t.r.DeleteItems(keyUsingOneTry, strconv.FormatInt(user.ID, 10))
+		userName := wd.UserString(&user)
+		users, err := wd.r.Items(keyUsingOneTry)
+		if wd.secondAttempt(users, err, strconv.FormatInt(user.ID, 10)) {
+			wd.kickChatMember(chatID, user.ID)
+			wd.r.DeleteItems(keyUsingOneTry, strconv.FormatInt(user.ID, 10))
 			return
 		}
 
@@ -570,7 +571,7 @@ func (t *Telega) KickChatMember(chatID int64, user tgbotapi.User) {
 	}()
 }
 
-func (t *Telega) secondAttempt(users []string, err error, userID string) bool {
+func (wd *Telega) secondAttempt(users []string, err error, userID string) bool {
 	if err != nil {
 		return false
 	}
@@ -583,37 +584,38 @@ func (t *Telega) secondAttempt(users []string, err error, userID string) bool {
 	return false
 }
 
-func (t *Telega) deleteLastMsg(userID int64) {
-	t.mx.Lock()
-	defer t.mx.Unlock()
+func (wd *Telega) deleteLastMsg(userID int64) {
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
-	delete(t.lastMsg, strconv.FormatInt(userID, 10))
+	delete(wd.lastMsg, strconv.FormatInt(userID, 10))
 }
 
-func (t *Telega) deleteAllLastMsg() {
-	t.mx.Lock()
-	defer t.mx.Unlock()
+func (wd *Telega) deleteAllLastMsg() {
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
-	t.lastMsg = map[string]string{}
+	wd.lastMsg = map[string]string{}
 }
 
-func (t *Telega) IsSPAM(userID int64, msg string, conf *Conf) (bool, string) {
+func (wd *Telega) IsSPAM(userID int64, msg string, conf *Conf) (bool, string) {
 	if conf == nil {
 		return false, ""
 	}
 
-	t.mx.Lock()
-	defer t.mx.Unlock()
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
 	// если есть последнее сообщение тогда выходим, не проверяем
-	if _, ok := t.lastMsg[strconv.FormatInt(userID, 10)]; ok {
+	if _, ok := wd.lastMsg[strconv.FormatInt(userID, 10)]; ok {
 		return false, ""
 	}
 
-	c := t.gigaClient(conf.AI.GigaChat.AuthKey)
+	c := wd.gigaClient(conf.AI.GigaChat.AuthKey)
 	s, p, r, err := c.GetSpamPercent(strings.ReplaceAll(msg, "\n", " "))
 	if err != nil {
-		log.Println(err)
+		log.Println(errors.Wrap(err, "getSpamPercent error"))
+		return false, ""
 	}
 
 	log.Printf("msg: %s\n"+
@@ -622,32 +624,32 @@ func (t *Telega) IsSPAM(userID int64, msg string, conf *Conf) (bool, string) {
 		"\treason: %s\n\n", msg, s, p, r)
 
 	if !s && err == nil {
-		t.lastMsg[strconv.FormatInt(userID, 10)] = msg
+		wd.lastMsg[strconv.FormatInt(userID, 10)] = msg
 	}
 
 	return s, r
 }
 
-func (t *Telega) gigaClient(authKey string) *giga.Client {
-	t.one.Do(func() {
-		t.gClient, _ = giga.NewGigaClient(context.Background(), authKey)
+func (wd *Telega) gigaClient(authKey string) *giga.Client {
+	wd.one.Do(func() {
+		wd.gClient, _ = giga.NewGigaClient(wd.ctx, authKey)
 	})
 
-	return t.gClient
+	return wd.gClient
 }
 
-func (t *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
-	t.DeleteMessage(chatID, messageID)
+func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
+	wd.DeleteMessage(chatID, messageID)
 
-	usrName := t.UserString(user)
-	msg, err := t.SendMsg(fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), "", chatID, Buttons{})
+	usrName := wd.UserString(user)
+	msg, err := wd.SendMsg(fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), "", chatID, Buttons{})
 	if err != nil {
 		log.Println("ERROR:", errors.Wrap(err, "send msg error"))
 		return
 	}
 
 	time.Sleep(time.Second * 10)
-	t.DeleteMessage(chatID, msg.MessageID)
+	wd.DeleteMessage(chatID, msg.MessageID)
 }
 
 // Buttons
@@ -832,14 +834,14 @@ func downloadFile(url string) (string, error) {
 	return f.Name(), err
 }
 
-func (t *Telega) getDelay() (result time.Duration) {
+func (wd *Telega) getDelay() (result time.Duration) {
 	result = time.Second
 
 	defer func() {
 		recover() // что б не прервалось, result у нас уже инициализирован дефолтным значением
 	}()
 
-	if items, err := t.r.Items(keyActiveMSG); err != nil {
+	if items, err := wd.r.Items(keyActiveMSG); err != nil {
 		return result
 	} else {
 		delay := len(items) / 25 // одновременных изменения не должны быть чаще 30 в сек, по этому задержку устанавливаем с учетом активных сообщений (25 эт с запасом)
@@ -850,7 +852,7 @@ func (t *Telega) getDelay() (result time.Duration) {
 	return
 }
 
-func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVote int) {
+func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVote int) {
 	user := sourceMsg.ReplyToMessage.From
 	msg := fmt.Sprintf("Что сделать с %s %s (@%s)?", user.FirstName, user.LastName, user.UserName)
 
@@ -881,16 +883,16 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 			}
 		}
 
-		t.EditButtons(sentMessage, b)
+		wd.EditButtons(sentMessage, b)
 	}
 
 	hBan := func(u *tgbotapi.Update, currentButton *Button) bool {
 		clear(u.CallbackQuery.From.ID)
 		ban[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ban) >= countVote {
-			t.DeleteMessage(chatID, sourceMsg.MessageID)
-			t.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
-			t.kickChatMember(chatID, user.ID)
+			wd.DeleteMessage(chatID, sourceMsg.MessageID)
+			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
+			wd.kickChatMember(chatID, user.ID)
 
 			log.Println("Ban -", ban)
 			return true
@@ -903,10 +905,10 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 		clear(u.CallbackQuery.From.ID)
 		ro[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ro) >= countVote {
-			t.DeleteMessage(chatID, sourceMsg.MessageID)
-			t.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
+			wd.DeleteMessage(chatID, sourceMsg.MessageID)
+			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
 
-			t.DisableSendMessages(chatID, user.ID, time.Hour*24)
+			wd.DisableSendMessages(chatID, user.ID, time.Hour*24)
 
 			log.Println("RO -", ro)
 			return true
@@ -933,7 +935,7 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 				renderCaption(b)
 
 				if len(forgive) >= countVote {
-					_ = t.DeleteMessage(chatID, sourceMsg.MessageID)
+					_ = wd.DeleteMessage(chatID, sourceMsg.MessageID)
 
 					log.Println("forgive -", forgive)
 					return true
@@ -945,24 +947,24 @@ func (t *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVot
 		{
 			caption: "Я передумал",
 			handler: func(update *tgbotapi.Update, button *Button) bool {
-				from := t.GetUser(update)
+				from := wd.GetUser(update)
 				if from.ID != author {
-					t.AnswerCallbackQuery(update.CallbackQuery.ID, "Отменить может только автор")
+					wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Отменить может только автор")
 					return false
 				}
 
-				t.DeleteMessage(chatID, sourceMsg.MessageID)
+				wd.DeleteMessage(chatID, sourceMsg.MessageID)
 				return true
 			},
 		},
 	}
 
-	if sentMessage, err = t.SendMsg(msg, "", chatID, b); err == nil {
+	if sentMessage, err = wd.SendMsg(msg, "", chatID, b); err == nil {
 		author = sourceMsg.From.ID
 	}
 }
 
-func (t *Telega) kickChatMemberUntil(chatID, userID int64, untilDate int64) error {
+func (wd *Telega) kickChatMemberUntil(chatID, userID int64, untilDate int64) error {
 	conf := tgbotapi.KickChatMemberConfig{
 		ChatMemberConfig: tgbotapi.ChatMemberConfig{
 			ChatID: chatID,
@@ -971,15 +973,15 @@ func (t *Telega) kickChatMemberUntil(chatID, userID int64, untilDate int64) erro
 		UntilDate: untilDate,
 	}
 
-	_, err := t.bot.Request(conf)
+	_, err := wd.bot.Request(conf)
 	return err
 }
 
-func (t *Telega) kickChatMember(chatID, userID int64) error {
-	return t.kickChatMemberUntil(chatID, userID, 0)
+func (wd *Telega) kickChatMember(chatID, userID int64) error {
+	return wd.kickChatMemberUntil(chatID, userID, 0)
 }
 
-func (t *Telega) unbanChatMember(chatID, userID int64) error {
+func (wd *Telega) unbanChatMember(chatID, userID int64) error {
 	conf := tgbotapi.UnbanChatMemberConfig{
 		ChatMemberConfig: tgbotapi.ChatMemberConfig{
 			ChatID: chatID,
@@ -987,42 +989,42 @@ func (t *Telega) unbanChatMember(chatID, userID int64) error {
 		},
 		OnlyIfBanned: true,
 	}
-	_, err := t.bot.Request(conf)
+	_, err := wd.bot.Request(conf)
 	return err
 }
 
-func (t *Telega) DeleteMessage(chatID int64, messageID int) error {
+func (wd *Telega) DeleteMessage(chatID int64, messageID int) error {
 	conf := tgbotapi.DeleteMessageConfig{
 		ChatID:    chatID,
 		MessageID: messageID,
 	}
 
-	_, err := t.bot.Request(conf)
+	_, err := wd.bot.Request(conf)
 	return err
 }
 
-func (t *Telega) SaveMember(chatID int64, user *tgbotapi.User) {
-	t.mx.Lock()
-	defer t.mx.Unlock()
+func (wd *Telega) SaveMember(chatID int64, user *tgbotapi.User) {
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
-	if _, ok := t.users[chatID]; !ok {
-		t.users[chatID] = map[int64]UserInfo{
+	if _, ok := wd.users[chatID]; !ok {
+		wd.users[chatID] = map[int64]UserInfo{
 			user.ID: {
 				ID:     user.ID,
-				Name:   t.UserString(user),
+				Name:   wd.UserString(user),
 				Weight: 1,
 			},
 		}
 	} else {
-		t.users[chatID][user.ID] = UserInfo{
+		wd.users[chatID][user.ID] = UserInfo{
 			ID:     user.ID,
-			Name:   t.UserString(user),
-			Weight: t.users[chatID][user.ID].Weight + 1,
+			Name:   wd.UserString(user),
+			Weight: wd.users[chatID][user.ID].Weight + 1,
 		}
 	}
 }
 
-func (t *Telega) UserString(user *tgbotapi.User) string {
+func (wd *Telega) UserString(user *tgbotapi.User) string {
 	userName := ""
 	if user.UserName != "" {
 		userName = "@" + user.UserName
@@ -1033,19 +1035,19 @@ func (t *Telega) UserString(user *tgbotapi.User) string {
 	return userName
 }
 
-func (t *Telega) CastUserToUserinfo(tUser *tgbotapi.User) *UserInfo {
+func (wd *Telega) CastUserToUserinfo(tUser *tgbotapi.User) *UserInfo {
 	if tUser == nil {
 		return nil
 	}
 
-	return &UserInfo{ID: tUser.ID, Name: t.UserString(tUser)}
+	return &UserInfo{ID: tUser.ID, Name: wd.UserString(tUser)}
 }
 
-func (t *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *UserInfo) {
-	t.mx.RLock()
-	defer t.mx.RUnlock()
+func (wd *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *UserInfo) {
+	wd.mx.RLock()
+	defer wd.mx.RUnlock()
 
-	usersByChat, ok := t.users[chatID]
+	usersByChat, ok := wd.users[chatID]
 	if !ok || len(usersByChat) == 0 {
 		return nil
 	}
@@ -1082,11 +1084,11 @@ func (t *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *UserI
 	return nil
 }
 
-func (t *Telega) GetRandUser(chatID, excludeUserID int64) (result *UserInfo) {
-	t.mx.RLock()
-	defer t.mx.RUnlock()
+func (wd *Telega) GetRandUser(chatID, excludeUserID int64) (result *UserInfo) {
+	wd.mx.RLock()
+	defer wd.mx.RUnlock()
 
-	usersByChat, ok := t.users[chatID]
+	usersByChat, ok := wd.users[chatID]
 	if !ok {
 		return nil
 	}
@@ -1102,18 +1104,18 @@ func (t *Telega) GetRandUser(chatID, excludeUserID int64) (result *UserInfo) {
 	return
 }
 
-func (t *Telega) AnswerCallbackQuery(callbackQueryID, txt string) error {
+func (wd *Telega) AnswerCallbackQuery(callbackQueryID, txt string) error {
 	conf := tgbotapi.CallbackConfig{
 		CallbackQueryID: callbackQueryID,
 		Text:            txt,
 		ShowAlert:       true,
 	}
 
-	_, err := t.bot.Request(conf)
+	_, err := wd.bot.Request(conf)
 	return err
 }
 
-func (t *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
+func (wd *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
 	var editmsg tgbotapi.Chattable
 	if msg.Caption != "" {
 		teditmsg := tgbotapi.NewEditMessageCaption(msg.Chat.ID, msg.MessageID, msg.Caption)
@@ -1125,45 +1127,45 @@ func (t *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
 		editmsg = &teditmsg
 	}
 
-	buttons.createButtons(editmsg, t.callback, func() {}, 2)
-	t.bot.Send(editmsg)
+	buttons.createButtons(editmsg, wd.callback, func() {}, 2)
+	wd.bot.Send(editmsg)
 }
 
-func (t *Telega) Shutdown() {
-	t.storeUsersInfo()
+func (wd *Telega) Shutdown() {
+	wd.storeUsersInfo()
 
-	t.mx.RLock()
-	t.r.SetMap(lastMsgKey, t.lastMsg)
-	t.mx.RUnlock()
+	wd.mx.RLock()
+	wd.r.SetMap(lastMsgKey, wd.lastMsg)
+	wd.mx.RUnlock()
 
-	t.cancel()
+	wd.cancel()
 
-	t.bot.StopReceivingUpdates()
+	wd.bot.StopReceivingUpdates()
 	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
-	err := t.httpServer.Shutdown(ctx)
+	err := wd.httpServer.Shutdown(ctx)
 	if err != nil {
 		log.Println("http server shutdown error:", err.Error())
 	}
 }
 
-func (t *Telega) restoreUsersInfo() {
-	t.mx.Lock()
-	defer t.mx.Unlock()
+func (wd *Telega) restoreUsersInfo() {
+	wd.mx.Lock()
+	defer wd.mx.Unlock()
 
-	data, err := t.r.Get(userInfo)
+	data, err := wd.r.Get(userInfo)
 	if err != nil {
 		log.Println(errors.Wrap(err, "restoreUsersInfo error"))
 		return
 	}
 
-	err = json.Unmarshal([]byte(data), &t.users)
+	err = json.Unmarshal([]byte(data), &wd.users)
 	if err != nil {
 		log.Println(errors.Wrap(err, "restoreUsersInfo error"))
 		return
 	}
 }
 
-func (t *Telega) watchActiveRandomModerator(delay time.Duration) {
+func (wd *Telega) watchActiveRandomModerator(delay time.Duration) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Println("PANIC:", e)
@@ -1171,8 +1173,8 @@ func (t *Telega) watchActiveRandomModerator(delay time.Duration) {
 	}()
 
 	for {
-		for _, k := range t.r.KeysMask(keyActiveRandomModerator + "*") {
-			v, err := t.r.Get(k)
+		for _, k := range wd.r.KeysMask(keyActiveRandomModerator + "*") {
+			v, err := wd.r.Get(k)
 			if err != nil {
 				continue
 			}
@@ -1186,49 +1188,49 @@ func (t *Telega) watchActiveRandomModerator(delay time.Duration) {
 			if time.Now().After(deadline) {
 				ID := data["User"].(map[string]interface{})["ID"].(float64)
 				chatID := data["ChatID"].(float64)
-				t.RemoveModerator(int64(chatID), int64(ID))
+				wd.RemoveModerator(int64(chatID), int64(ID))
 			}
 		}
 
 		select {
 		case <-time.After(delay):
-		case <-t.ctx.Done():
+		case <-wd.ctx.Done():
 			return
 		}
 	}
 }
 
-func (t *Telega) watchKilledUsers(delay time.Duration) {
+func (wd *Telega) watchKilledUsers(delay time.Duration) {
 	for {
-		killed, _ := t.r.Items(killedUsers)
+		killed, _ := wd.r.Items(killedUsers)
 		for _, data := range killed {
 			tmp := new(KilledInfo)
 			if err := json.Unmarshal([]byte(data), tmp); err == nil {
 				if time.Now().After(tmp.To) {
-					t.r.DeleteItems(killedUsers, data)
+					wd.r.DeleteItems(killedUsers, data)
 				}
 			}
 		}
 
 		select {
 		case <-time.After(delay):
-		case <-t.ctx.Done():
+		case <-wd.ctx.Done():
 			return
 		}
 	}
 }
 
-func (t *Telega) storeUsersInfo() {
-	t.mx.RLock()
-	defer t.mx.RUnlock()
+func (wd *Telega) storeUsersInfo() {
+	wd.mx.RLock()
+	defer wd.mx.RUnlock()
 
-	data, err := json.Marshal(t.users)
+	data, err := json.Marshal(wd.users)
 	if err != nil {
 		log.Println(errors.Wrap(err, "storeUsersInfo error"))
 		return
 	}
 
-	err = t.r.Set(userInfo, string(data), -1)
+	err = wd.r.Set(userInfo, string(data), -1)
 	if err != nil {
 		log.Println(errors.Wrap(err, "storeUsersInfo error"))
 		return
@@ -1253,7 +1255,7 @@ func (k *KilledInfo) String() string {
 	return string(d)
 }
 
-func (t *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, conf *Conf) bool {
+func (wd *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, conf *Conf) bool {
 	if conf.BlockMembers.UserNameRegExp == "" || appendedUser == nil {
 		return false
 	}
@@ -1265,8 +1267,8 @@ func (t *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, 
 
 	exp := conf.BlockMembers.UserNameRegExp
 
-	if t.checkRegExp(appendedUser.String(), exp) || t.checkRegExp(name, exp) {
-		t.kickChatMember(chatID, appendedUser.ID)
+	if wd.checkRegExp(appendedUser.String(), exp) || wd.checkRegExp(name, exp) {
+		wd.kickChatMember(chatID, appendedUser.ID)
 		fmt.Printf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String())
 		return true
 	}
@@ -1274,7 +1276,7 @@ func (t *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, 
 	return false
 }
 
-func (t *Telega) checkRegExp(userName string, exp string) bool {
+func (wd *Telega) checkRegExp(userName string, exp string) bool {
 	var re = regexp.MustCompile(exp)
 	match := re.FindAllString(userName, -1)
 	return len(match) > 0
