@@ -639,6 +639,8 @@ func (wd *Telega) gigaClient(authKey string) *giga.Client {
 }
 
 func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
+	log.Printf("chatID: %d, удален спам от пользователя %s\n", chatID, user.String())
+
 	wd.DeleteMessage(chatID, messageID)
 
 	usrName := wd.UserString(user)

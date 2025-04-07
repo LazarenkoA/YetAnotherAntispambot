@@ -82,11 +82,6 @@ func (wd *Telega) start(chatID int64, msg *tgbotapi.Message) {
 }
 
 func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline time.Time) {
-	if userName, deadline := wd.GetActiveRandModerator(chatID); userName != "" {
-		wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s", userName, deadline.Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
-		return
-	}
-
 	randUser := wd.GetRandUserByWeight(chatID, msg.From.ID)
 	if randUser == nil {
 		wd.SendTTLMsg("Не смог получить кандидата", "", chatID, Buttons{}, time.Second*5)
@@ -106,6 +101,11 @@ func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline 
 }
 
 func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message) {
+	if userName, deadline := wd.GetActiveRandModerator(chatID); userName != "" {
+		wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s", userName, deadline.Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
+		return
+	}
+
 	if wd.randomModeratorMX.TryLock() {
 		defer wd.randomModeratorMX.Unlock()
 	} else {
