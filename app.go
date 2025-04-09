@@ -121,7 +121,7 @@ func Run(ctx_ context.Context) error {
 			wd.configuration(chatID, update)
 			continue
 		case "random_moderator":
-			wd.randomModeratorAutoExtend(chatID, msg)
+			go wd.randomModeratorAutoExtend(chatID, msg)
 			continue
 		case "russian_roulette":
 			wd.russianRoulette(chatID, msg)

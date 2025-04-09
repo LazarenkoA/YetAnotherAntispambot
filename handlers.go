@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+var (
+	errAlreadySelected = errors.New("moderator already selected")
+)
+
 func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 	// пример команды
 	// /checkAI::Здраствуйте!  Нужны люди на удалённый проект, от 500$ в неделю, 2-3 часа в день, 18+. Жду в личке::MTZmODdlMmU...xLTM0OWE0MmE1NDJiNg==
@@ -82,6 +86,10 @@ func (wd *Telega) start(chatID int64, msg *tgbotapi.Message) {
 }
 
 func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline time.Time) error {
+	if userName, _ := wd.GetActiveRandModerator(chatID); userName != "" {
+		return errAlreadySelected
+	}
+
 	randUser := wd.GetRandUserByWeight(chatID, msg.From.ID)
 	if randUser == nil {
 		return errors.New("не смог получить кандидата")
@@ -94,7 +102,7 @@ func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline 
 	if err := wd.AppointModerator(chatID, randUser, deadline); err != nil {
 		return err
 	} else {
-		wd.SendMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %v", randUser.Name, deadline.Format("02-01-2006 15:04")), "", chatID, Buttons{})
+		wd.SendMsg(fmt.Sprintf("У нас новый модератор (%s), срок до %s (UTC)", randUser.Name, deadline.UTC().Format("02-01-2006 15:04")), "", chatID, Buttons{})
 	}
 
 	return nil
@@ -102,8 +110,7 @@ func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline 
 
 func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message) {
 	if userName, deadline := wd.GetActiveRandModerator(chatID); userName != "" {
-		wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s", userName, deadline.Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
-		return
+		wd.SendTTLMsg(fmt.Sprintf("%s уже выбран модератором, перевыбрать можно после %s (UTC)", userName, deadline.UTC().Format("02-01-2006 15:04:05")), "", chatID, Buttons{}, time.Second*5)
 	}
 
 	if wd.randomModeratorMX.TryLock() {
@@ -113,15 +120,12 @@ func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message)
 		return
 	}
 
-	delay := (time.Minute * 1440) + 1 // 24ч +1 минута
-	tick := time.NewTicker(delay)
+	tick := time.NewTicker(time.Minute * 5)
+	defer tick.Stop()
 
 	for {
-		if err := wd.randomModerator(chatID, msg, time.Now().Add(time.Hour*24)); err != nil {
-			wd.SendTTLMsg(errors.Wrap(err, "произошла ошибка").Error(), "", chatID, Buttons{}, time.Second*5)
-			tick.Reset(time.Minute)
-		} else {
-			tick.Reset(delay)
+		if err := wd.randomModerator(chatID, msg, time.Now().Add(time.Hour*24)); err != nil && !errors.Is(err, errAlreadySelected) {
+			wd.logger.Error(errors.Wrap(err, "произошла ошибка при выборе модератора").Error())
 		}
 
 		select {
