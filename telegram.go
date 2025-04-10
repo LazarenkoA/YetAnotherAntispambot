@@ -74,8 +74,7 @@ type Telega struct {
 	hooks             map[string]func(tgbotapi.Update) bool
 	running           int32
 	r                 IRedis
-	gClient           *giga.Client
-	one               sync.Once
+	pool              sync.Map
 	lastMsg           map[string]string // для хранения последнего сообщения по пользователю
 	mx                sync.RWMutex
 	httpServer        *http.Server
@@ -207,7 +206,7 @@ func (wd *Telega) getAllChats() []string {
 
 	for _, key := range wd.r.Keys() {
 		if title, err := wd.r.Get(key); err == nil {
-			result = append(result, title)
+			result = append(result, key+"::"+title)
 		}
 	}
 
@@ -616,7 +615,7 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 		return false, ""
 	}
 
-	c := wd.gigaClient(conf.AI.GigaChat.AuthKey)
+	c := wd.gigaClient(chatID, conf.AI.GigaChat.AuthKey)
 	s, p, r, err := c.GetSpamPercent(strings.ReplaceAll(msg, "\n", " "))
 	if err != nil {
 		logger.Error(errors.Wrap(err, "getSpamPercent error").Error())
@@ -631,12 +630,15 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	return s, r
 }
 
-func (wd *Telega) gigaClient(authKey string) *giga.Client {
-	wd.one.Do(func() {
-		wd.gClient, _ = giga.NewGigaClient(wd.ctx, authKey)
-	})
+func (wd *Telega) gigaClient(chatID int64, authKey string) *giga.Client {
+	if client, ok := wd.pool.Load(chatID); ok {
+		return client.(*giga.Client)
+	}
 
-	return wd.gClient
+	client, _ := giga.NewGigaClient(wd.ctx, authKey)
+	wd.pool.Store(chatID, client)
+
+	return client
 }
 
 func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
@@ -1056,6 +1058,9 @@ func (wd *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *User
 	if !ok || len(usersByChat) == 0 {
 		return nil
 	}
+
+	//data, _ := json.Marshal(&usersByChat)
+	//fmt.Println("usersByChat - ", string(data))
 
 	tmp := make([]UserInfo, 0, len(usersByChat))
 	prefixSums := make([]int64, len(usersByChat))

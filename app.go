@@ -30,6 +30,7 @@ var (
 	redisAddr   = os.Getenv("REDIS")
 	cert        = os.Getenv("CRT")
 	pollingMode = os.Getenv("POLLING_MODE")
+	ownerID     = os.Getenv("OWNER_ID") // используется для некоторых функций бота
 )
 
 var (
@@ -136,13 +137,16 @@ func Run(ctx_ context.Context) error {
 			wd.deleteLastMsg(msg.From.ID)
 			continue
 		case "allchats":
-			logger.Info(strings.Join(wd.getAllChats(), "\n"))
+			wd.allChats(msg)
 			continue
 		case "help":
 			wd.help(chatID)
 			continue
 		case "checkAI":
 			wd.checkAI(chatID, msg)
+			continue
+		case "notify":
+			wd.notify(chatID, msg)
 			continue
 		default:
 			if command != "" {

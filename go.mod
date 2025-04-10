@@ -2,7 +2,7 @@ module Antispam
 
 go 1.23
 
-replace github.com/paulrzcz/go-gigachat => ../go-gigachat
+//replace github.com/paulrzcz/go-gigachat => ../go-gigachat
 
 require (
 	github.com/agiledragon/gomonkey/v2 v2.12.0

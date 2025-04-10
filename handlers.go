@@ -30,7 +30,7 @@ func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 	if len(split) >= 3 {
 		authKey = strings.TrimSpace(split[2])
 	} else if len(split) < 2 {
-		wd.SendMsg("Не корректный формат сообщения", "", chatID, Buttons{})
+		wd.SendMsg("Некорректный формат сообщения", "", chatID, Buttons{})
 		return
 	}
 
@@ -39,7 +39,7 @@ func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 		return
 	}
 
-	isSpam, percent, reason, err := wd.gigaClient(authKey).GetSpamPercent(split[1])
+	isSpam, percent, reason, err := wd.gigaClient(chatID, authKey).GetSpamPercent(split[1])
 	if err != nil {
 		wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 	} else {
@@ -94,6 +94,8 @@ func (wd *Telega) randomModerator(chatID int64, msg *tgbotapi.Message, deadline 
 	if randUser == nil {
 		return errors.New("не смог получить кандидата")
 	}
+
+	wd.logger.Debug(fmt.Sprintf("выбран случайный пользователь %q", randUser.Name))
 
 	if wd.UserIsAdmin(msg.Chat.ChatConfig(), randUser.ID) {
 		return fmt.Errorf("%s уже является администратором, можно попробовать повторно выбрать кандидатуру", randUser.Name)
@@ -231,5 +233,66 @@ func (wd *Telega) russianRoulette(chatID int64, msg *tgbotapi.Message) {
 		author = msg.From.ID
 	} else {
 		wd.logger.Error(errors.Wrap(err, "sendMsg error").Error())
+	}
+}
+
+func (wd *Telega) allChats(msg *tgbotapi.Message) {
+	if msg == nil || ownerID == "" || strconv.FormatInt(msg.From.ID, 10) != ownerID {
+		return
+	}
+
+	var links []string
+	for _, item := range wd.getAllChats() {
+		s := strings.Split(item, "::")
+		chatIDStr, name := s[0], s[1]
+
+		chatID, _ := strconv.ParseInt(chatIDStr, 10, 64)
+
+		chat, err := wd.bot.GetChat(tgbotapi.ChatInfoConfig{
+			ChatConfig: tgbotapi.ChatConfig{ChatID: chatID},
+		})
+		if err == nil {
+			links = append(links, fmt.Sprintf("%s (@%s)", name, chat.UserName))
+		}
+
+		//inviteLinkConfig := tgbotapi.ChatInviteLinkConfig{
+		//	ChatConfig: tgbotapi.ChatConfig{
+		//		ChatID:             chatID,
+		//		SuperGroupUsername: name,
+		//	},
+		//}
+		//
+		//inviteLink, err := wd.bot.GetInviteLink(inviteLinkConfig)
+		//if err != nil {
+		//	wd.logger.With("chatID", chatIDStr, "name", name).Error(errors.Wrap(err, "GetInviteLink error").Error())
+		//} else {
+		//	inviteLink = "<>"
+		//}
+
+	}
+
+	wd.SendMsg(strings.Join(links, "\n"), "", msg.Chat.ID, Buttons{})
+}
+
+func (wd *Telega) notify(chatID int64, msg *tgbotapi.Message) {
+	if msg == nil || ownerID == "" || strconv.FormatInt(msg.From.ID, 10) != ownerID {
+		return
+	}
+
+	split := strings.Split(msg.Text, "::")
+	if len(split) != 2 {
+		wd.SendMsg("Некорректный формат сообщения", "", chatID, Buttons{})
+		return
+	}
+
+	msgText := split[1]
+
+	for _, item := range wd.getAllChats() {
+		s := strings.Split(item, "::")
+		if chatID, err := strconv.ParseInt(s[0], 10, 64); err == nil {
+			if _, err := wd.SendMsg(msgText, "", chatID, Buttons{}); err == nil {
+				wd.logger.Info(fmt.Sprintf("в чат %q отправлено сообщение", s[1]))
+			}
+		}
 	}
 }
