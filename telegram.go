@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/k0kubun/pp/v3"
 	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
@@ -600,6 +601,33 @@ func (wd *Telega) deleteAllLastMsg() {
 	wd.lastMsg = map[string]string{}
 }
 
+// CheckMessage проверяет сообщение на токсичность и оффтоп
+func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
+	if msg == nil || conf == nil {
+		return
+	}
+
+	if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
+		wd.logger.Debug(fmt.Sprintf("user: %s skipped, userWeight: %d", msg.From.String(), userWeight))
+		return
+	}
+
+	c := wd.gigaClient(msg.Chat.ID, conf.AI.GigaChat.AuthKey)
+	analysis, err := c.GetMessageCharacteristics(strings.ReplaceAll(msg.Text, "\n", " "))
+	if err != nil {
+		wd.logger.Error(errors.Wrap(err, "GetMessageCharacteristics error").Error())
+		return
+	}
+
+	if analysis.IsToxic {
+		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:  %s", analysis.ToxicReason), "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	}
+
+	if analysis.IsOffTopic {
+		wd.ReplyMsg("Ваше сообщение не относится к тематике чата", "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	}
+}
+
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
 	if conf == nil {
 		return false, ""
@@ -616,18 +644,21 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	}
 
 	c := wd.gigaClient(chatID, conf.AI.GigaChat.AuthKey)
-	s, p, r, err := c.GetSpamPercent(strings.ReplaceAll(msg, "\n", " "))
+	analysis, err := c.GetMessageCharacteristics(strings.ReplaceAll(msg, "\n", " "))
 	if err != nil {
 		logger.Error(errors.Wrap(err, "getSpamPercent error").Error())
 		return false, ""
 	}
 
-	logger.Info(msg, "solution", s, "percent", p, "reason", r)
-	if !s {
+	p := pp.New()
+	p.SetColoringEnabled(false)
+
+	logger.Info(fmt.Sprintf("msg: %s, IsSPAM: %v", msg, p.Sprint(analysis)))
+	if !analysis.IsSpam {
 		wd.lastMsg[strconv.FormatInt(userID, 10)] = msg
 	}
 
-	return s, r
+	return analysis.IsSpam, analysis.SpamReason
 }
 
 func (wd *Telega) gigaClient(chatID int64, authKey string) *giga.Client {
@@ -1299,4 +1330,16 @@ func (u *UserInfo) String() string {
 	}
 
 	return string(d)
+}
+
+func (wd *Telega) userWeight(chatID, userID int64) int64 {
+	if usersByChat, ok := wd.users[chatID]; !ok {
+		wd.logger.Info(fmt.Sprintf("chatID: %d not found in map", chatID))
+		return 0
+	} else if user, ok := usersByChat[userID]; !ok {
+		wd.logger.Info(fmt.Sprintf("userID: %d not found in map (chatID: %d)", userID, chatID))
+		return 0
+	} else {
+		return user.Weight
+	}
 }

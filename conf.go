@@ -45,7 +45,7 @@ func LoadConfFromFile(confpath string) (result *Conf, err error) {
 
 func LoadConf(conf []byte) (result *Conf, err error) {
 	result = new(Conf)
-	err = yaml.Unmarshal(conf, &result)
+	err = yaml.Unmarshal(conf, result)
 	if result.CountVoted == 0 {
 		result.CountVoted = 5
 	}

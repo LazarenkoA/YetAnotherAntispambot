@@ -2,13 +2,11 @@ package giga
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/paulrzcz/go-gigachat"
 	"github.com/pkg/errors"
-	"github.com/samber/lo"
 	"log/slog"
-	"strconv"
-	"strings"
 )
 
 //go:generate mockgen -source=$GOFILE -destination=./mock/mock.go
@@ -34,14 +32,14 @@ func NewGigaClient(ctx context.Context, authKey string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
+func (c *Client) GetMessageCharacteristics(msgText string) (*MessageAnalysis, error) {
 	err := c.client.AuthWithContext(c.ctx)
 	if err != nil {
-		return false, -1, "", errors.Wrap(err, "auth error")
+		return nil, errors.Wrap(err, "auth error")
 	}
 
 	if msgText == "" {
-		return false, -1, "", errors.New("message is not defined")
+		return nil, errors.New("message is not defined")
 	}
 
 	logger := slog.Default().With("name", "GetSpamPercent")
@@ -51,11 +49,11 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 		Messages: []gigachat.Message{
 			{
 				Role:    "system",
-				Content: c.promptGetSpamPercent(),
+				Content: "Ты — языковая модель, анализирующая сообщения из IT-чата",
 			},
 			{
 				Role:    "user",
-				Content: msgText,
+				Content: c.promptGetSpamPercent(msgText),
 			},
 		},
 		Temperature: ptr(0.7),
@@ -64,41 +62,51 @@ func (c *Client) GetSpamPercent(msgText string) (bool, int, string, error) {
 
 	resp, err := c.client.ChatWithContext(c.ctx, req)
 	if err != nil {
-		return false, -1, "", errors.Wrap(err, "request error")
+		return nil, errors.Wrap(err, "request error")
 	}
 
 	if len(resp.Choices) == 0 {
-		return false, -1, "", errors.New("response does not contain data")
+		return nil, errors.New("response does not contain data")
 	}
 
-	parts := strings.Split(resp.Choices[0].Message.Content, "|")
-	if len(parts) != 2 {
-		logger.Error("bad response format, parts not 2", "content", resp.Choices[0].Message.Content)
-		return false, -1, "", errors.New("bad response format")
+	var analysis MessageAnalysis
+	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &analysis); err != nil {
+		logger.Error(errors.Wrap(err, "json unmarshal error").Error())
+		return nil, err
 	}
 
-	percent, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil {
-		logger.Error("parse int, bad response format", "content", resp.Choices[0].Message.Content)
-		return false, -1, "", errors.New("bad response format")
-	}
-
-	isSpam := percent >= 70
-	return isSpam, percent, strings.TrimSpace(parts[1]), nil
+	return &analysis, nil
 }
 
-func (c *Client) promptGetSpamPercent() string {
-	return fmt.Sprintf("Ты модератор IT чата. В ЧАТА ЗАПРЕЩЕН ПОИСК РАБОТЫ И НАЕМ СОТРУДНИКОВ. Зашел новый участник и отправил новое сообщение, произведи анализ сообщения из чата и оцени вероятность того, что оно является спамом.\n" +
-		"Верни число в процентах (от 0 до 100), где 0 означает, что сообщение определенно не является спамом, а 100 означает, что сообщение определенно является спамом.\n" +
-		"Ответ должен соответствовать такому шаблону: <int: вероятность того что это спам>|<string: пояснение почему ты считаешь это спамом>\n" +
-		"например 89|в сообщении фигурирует фраза про криптовалюту и заработок\n" +
-		"перед тем как отправить ответ, ПЕРЕПРОВЕРЬ правильно ли ты понял мою просьбу и верен ли твой ответ.\n" +
-		"Вот сообщение:")
-}
+func (c *Client) promptGetSpamPercent(msg string) string {
+	return fmt.Sprintf(`По сообщению ты должен определить его характеристики:
+								По одному сообщению ты должна определить его характеристики и обосновать выводы.
+								
+								Определи и выведи результат строго в формате JSON:
+								
+								- is_spam: Является ли сообщение спамом (true/false)
+								- spam_reason: Краткое объяснение, почему сообщение определено (или не определено) как спам
+								- is_toxic: Есть ли в сообщении признаки токсичности (true/false)
+								- toxic_reason: Краткое объяснение, если сообщение признано токсичным или агрессивным
+								- is_offtopic: Является ли сообщение оффтопом (true/false)
+								- offtopic_reason: Краткое объяснение, почему сообщение сочтено оффтопом (или нет)
+								
 
-func (c *Client) promptCheck(percent int) string {
-	return fmt.Sprintf("LLM был задан вопрос определить является ли данное сообщение спамом ее ответ %q."+
-		"Верен или нет ее ответ, ответь \"да\" если LLM дала верный ответ и \"нет\" если не верен", lo.If(percent >= 70, "является спамом").Else("не является спамом"))
+								Выведи результат строго в формате JSON без дополнительных комментариев:
+								
+								{
+								  "is_spam": true,
+								  "spam_reason": "Сообщение содержит рекламу сомнительного заработка и внешнюю ссылку.",
+								  "is_toxic": false,
+								  "toxic_reason": "Нет признаков агрессии или оскорблений.",
+								  "is_offtopic": true,
+								  "offtopic_reason": "Тематика сообщения не связана с IT и не относится к текущему обсуждению."
+								}						
+
+								ПЕРЕД ОТВЕТОМ ПРОВЕРЬ JSON НА ВАЛИДНОСТЬ
+
+								Вот сообщение для анализа:
+								"%s"`, msg)
 }
 
 func ptr[T any](v T) *T {
