@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"io"
 	"io/ioutil"
 	"log"
 	"log/slog"
+	"maps"
 	"math/rand"
 	"net/http"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1053,21 +1056,28 @@ func (wd *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *User
 	defer wd.mx.RUnlock()
 
 	usersByChat, ok := wd.users[chatID]
-	wd.logger.WithGroup("GetRandUserByWeight").With("chatID", chatID).Debug(fmt.Sprintf("users len - %d", len(usersByChat)))
-
 	if !ok || len(usersByChat) == 0 {
 		return nil
 	}
 
+	allUsers := slices.Collect(maps.Values(usersByChat))
+
+	// отсекаем пользователей с весом 0, 1
+	allUsers = lo.Filter[UserInfo](allUsers, func(item UserInfo, _ int) bool {
+		return item.Weight > 2
+	})
+
+	wd.logger.WithGroup("GetRandUserByWeight").With("chatID", chatID).Debug(fmt.Sprintf("users len - %d", len(allUsers)))
+
 	//data, _ := json.Marshal(&usersByChat)
 	//fmt.Println("usersByChat - ", string(data))
 
-	tmp := make([]UserInfo, 0, len(usersByChat))
-	prefixSums := make([]int64, len(usersByChat))
+	tmp := make([]UserInfo, 0, len(allUsers))
+	prefixSums := make([]int64, len(allUsers))
 
 	// перекладываем в слайс, тут же находим сумму всех элементов
-	for k, v := range usersByChat {
-		if excludeUserID > 0 && k == excludeUserID {
+	for _, v := range allUsers {
+		if excludeUserID > 0 && v.ID == excludeUserID {
 			continue
 		}
 

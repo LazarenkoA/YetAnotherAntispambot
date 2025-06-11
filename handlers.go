@@ -128,6 +128,7 @@ func (wd *Telega) randomModeratorAutoExtend(chatID int64, msg *tgbotapi.Message)
 	for {
 		if err := wd.randomModerator(chatID, msg, time.Now().Add(time.Hour*24)); err != nil && !errors.Is(err, errAlreadySelected) {
 			wd.logger.Error(errors.Wrap(err, "произошла ошибка при выборе модератора").Error())
+			return
 		}
 
 		select {

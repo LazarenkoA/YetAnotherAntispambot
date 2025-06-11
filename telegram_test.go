@@ -173,7 +173,6 @@ func Test_GetRandUserByWeight(t *testing.T) {
 	//		fmt.Println(user)
 	//		tmp[user.ID]++
 	//	}
-	//
 	//})
 }
 
