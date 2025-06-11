@@ -1,5 +1,3 @@
-#!/bin/bash
-set -e
 
 # Проверка наличия переменной окружения
 if [ -z "$REMOTE_IP" ]; then
@@ -9,7 +7,7 @@ fi
 
 # Сборка бинарника
 echo "Сборка Go-программы..."
-go build -o dredd cmd/main.go
+CGO_ENABLED=0 go build -o dredd cmd/main.go
 
 # Загрузка по SFTP
 sftp -i /mnt/d/.ssh-cloud/key artem@"$REMOTE_IP" <<EOF

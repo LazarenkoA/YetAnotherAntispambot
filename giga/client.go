@@ -16,8 +16,9 @@ type IGigaClient interface {
 }
 
 type Client struct {
-	ctx    context.Context
-	client IGigaClient
+	ctx      context.Context
+	client   IGigaClient
+	countReq int
 }
 
 func NewGigaClient(ctx context.Context, authKey string) (*Client, error) {
@@ -74,6 +75,12 @@ func (c *Client) GetMessageCharacteristics(msgText string) (*MessageAnalysis, er
 		logger.Error(errors.Wrap(err, "json unmarshal error").Error())
 		return nil, err
 	}
+
+	if c.countReq%10 == 0 {
+		logger.Info(fmt.Sprintf("gigachat API request count: %d", c.countReq+1))
+	}
+
+	c.countReq++
 
 	return &analysis, nil
 }

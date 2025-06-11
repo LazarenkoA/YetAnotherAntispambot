@@ -606,12 +606,12 @@ func (wd *Telega) deleteAllLastMsg() {
 
 // CheckMessage проверяет сообщение на токсичность и оффтоп
 func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
-	if msg == nil || conf == nil {
+	if msg == nil || conf == nil || conf.AI.GigaChat.AuthKey == "" {
 		return
 	}
 
 	if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
-		wd.logger.Debug(fmt.Sprintf("user: %s skipped, userWeight: %d", msg.From.String(), userWeight))
+		wd.logger.Debug(fmt.Sprintf("user: %s in chat: %s skipped, userWeight: %d", msg.From.String(), msg.Chat.Title, userWeight))
 		return
 	}
 
@@ -632,7 +632,7 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 }
 
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
-	if conf == nil {
+	if conf == nil || conf.AI.GigaChat.AuthKey == "" {
 		return false, ""
 	}
 
