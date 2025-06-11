@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/alecthomas/kingpin/v2"
+	"github.com/joho/godotenv"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"log/slog"
@@ -24,13 +25,13 @@ type wrapper struct {
 }
 
 var (
-	botToken    = os.Getenv("BotToken")
-	webhookURL  = os.Getenv("WebhookURL")
-	port        = os.Getenv("PORT")
-	redisAddr   = os.Getenv("REDIS")
-	cert        = os.Getenv("CRT")
-	pollingMode = os.Getenv("POLLING_MODE")
-	ownerID     = os.Getenv("OWNER_ID") // используется для некоторых функций бота
+	botToken    string
+	webhookURL  string
+	port        string
+	redisAddr   string
+	cert        string
+	pollingMode string
+	ownerID     string
 )
 
 var (
@@ -39,15 +40,24 @@ var (
 )
 
 const (
-	questionsKey = "questions"
-	lastMsgKey   = "lastMsg"
-	userInfo     = "userInfo"
-	killedUsers  = "killedUsers"
+	settingsKey = "questions"
+	lastMsgKey  = "lastMsg"
+	userInfo    = "userInfo"
+	killedUsers = "killedUsers"
 )
 
 func init() {
 	kp = kingpin.New("Антиспам бот", "")
 	kp.Flag("debug", "вывод отладочной информации").Short('d').BoolVar(&debug)
+
+	_ = godotenv.Load()
+	botToken = os.Getenv("BotToken")
+	webhookURL = os.Getenv("WebhookURL")
+	port = os.Getenv("PORT")
+	redisAddr = os.Getenv("REDIS")
+	cert = os.Getenv("CRT")
+	pollingMode = os.Getenv("POLLING_MODE")
+	ownerID = os.Getenv("OWNER_ID") // используется для некоторых функций бота
 }
 
 func Run(ctx_ context.Context) error {
@@ -180,6 +190,8 @@ func Run(ctx_ context.Context) error {
 			if s, r := wd.IsSPAM(user.ID, chatID, txt, readConf(wd, chatID)); s {
 				time.Sleep(time.Millisecond * 500) // небольшая задержка, иногда сообщение в клиенте может отрисовываться после удаления
 				wd.deleteSpam(user, r, msg.MessageID, chatID)
+			} else {
+				wd.CheckMessage(msg, readConf(wd, chatID))
 			}
 		}
 	}
@@ -260,13 +272,13 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 				return false
 			}
 			if confdata, err := wd.ReadFile(upd.Message); err == nil {
-				settings, err := wrap(wd.r.StringMap(questionsKey)).result()
+				settings, err := wrap(wd.r.StringMap(settingsKey)).result()
 				if err != nil {
 					wd.SendMsg(fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", err), "", chatID, Buttons{})
 				}
 
 				settings[chat] = confdata
-				wd.r.SetMap(questionsKey, settings)
+				wd.r.SetMap(settingsKey, settings)
 
 				wd.SendTTLMsg("👍", "", chatID, Buttons{}, time.Second*10)
 				return true
@@ -296,7 +308,7 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 func getSettings(wd *Telega, key string, chatID int64) bool {
 	logger := wd.logger.With("chatID", chatID)
 
-	settings, err := wrap(wd.r.StringMap(questionsKey)).result()
+	settings, err := wrap(wd.r.StringMap(settingsKey)).result()
 	if err != nil {
 		logger.Error(fmt.Errorf("ошибка получения конфига из redis: %w", err).Error())
 		return false
@@ -459,7 +471,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 }
 
 func readConf(wd *Telega, chatID int64) *Conf {
-	settings, err := wrap(wd.r.StringMap(questionsKey)).result() // todo переделать на мапу в памяти как lastMsg
+	settings, err := wrap(wd.r.StringMap(settingsKey)).result() // todo переделать на мапу в памяти как lastMsg
 	if err != nil {
 		wd.logger.Error(errors.Wrap(err, "read settings error").Error())
 		return nil
@@ -468,11 +480,13 @@ func readConf(wd *Telega, chatID int64) *Conf {
 	key := strconv.FormatInt(chatID, 10)
 	confStr, ok := settings[key]
 	if !ok {
+		wd.logger.Info(fmt.Sprintf("settings not found for chat: %d", chatID))
 		return nil
 	}
 
 	conf, err := LoadConf([]byte(confStr))
 	if err != nil {
+		wd.logger.Error(errors.Wrap(err, "LoadConf error").Error())
 		return nil
 	}
 	return conf

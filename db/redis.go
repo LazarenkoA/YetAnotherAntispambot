@@ -4,6 +4,7 @@ import (
 	"github.com/pkg/errors"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/garyburd/redigo/redis"
 )
@@ -145,6 +146,10 @@ func (R *Redis) AppendItems(key, value string) {
 
 func (R *Redis) SetMap(key string, value map[string]string) {
 	for k, v := range value {
+		if !utf8.ValidString(v) {
+			R.logger.Warn("string value not UTF-8", "key", k, "value", v)
+		}
+
 		_, err := R.pool.Get().Do("HSET", key, k, v)
 		if err != nil {
 			R.logger.Error("ошибка при выполнении SetMap", "key", key, "value", value, "error", err)

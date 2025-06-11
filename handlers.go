@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/k0kubun/pp/v3"
 	"github.com/pkg/errors"
 	"math/rand"
 	"os"
@@ -39,12 +40,13 @@ func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 		return
 	}
 
-	isSpam, percent, reason, err := wd.gigaClient(chatID, authKey).GetSpamPercent(split[1])
+	analysis, err := wd.gigaClient(chatID, authKey).GetMessageCharacteristics(split[1])
 	if err != nil {
 		wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 	} else {
-		wd.logger.Info(split[1], "solution", isSpam, "percent", percent, "reason", reason)
-		wd.SendMsg(fmt.Sprintf("%v, %v, %s", isSpam, percent, reason), "", chatID, Buttons{})
+		mypp := pp.New()
+		mypp.SetColoringEnabled(false)
+		wd.SendMsg(fmt.Sprintf("%v", mypp.Sprint(analysis)), "", chatID, Buttons{})
 	}
 }
 
