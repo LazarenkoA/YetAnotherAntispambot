@@ -86,8 +86,7 @@ func (c *Client) GetMessageCharacteristics(msgText string) (*MessageAnalysis, er
 }
 
 func (c *Client) promptGetSpamPercent(msg string) string {
-	return fmt.Sprintf(`По сообщению ты должен определить его характеристики:
-								По одному сообщению ты должна определить его характеристики и обосновать выводы.
+	return fmt.Sprintf(`По одному сообщению ты должен определить его характеристики и обосновать выводы.
 								
 								Определи и выведи результат строго в формате JSON:
 								
