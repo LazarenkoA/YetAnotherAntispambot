@@ -7,6 +7,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
+	"golang.org/x/time/rate"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -84,6 +85,8 @@ func Run(ctx_ context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx_)
 	go shutdown(wd, cancel)
+
+	limiter := rate.Sometimes{Interval: time.Second * 30} // лимит на вызов апи гигачата
 
 	for {
 		var update tgbotapi.Update
@@ -191,7 +194,9 @@ func Run(ctx_ context.Context) error {
 				time.Sleep(time.Millisecond * 500) // небольшая задержка, иногда сообщение в клиенте может отрисовываться после удаления
 				wd.deleteSpam(user, r, msg.MessageID, chatID)
 			} else {
-				wd.CheckMessage(msg, readConf(wd, chatID))
+				limiter.Do(func() {
+					wd.CheckMessage(msg, readConf(wd, chatID))
+				})
 			}
 		}
 	}

@@ -56,7 +56,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, _, _, err := cli.GetSpamPercent("")
+		_, err := cli.GetMessageCharacteristics("")
 		assert.EqualError(t, err, "auth error: error")
 	})
 	t.Run("req error", func(t *testing.T) {
@@ -72,7 +72,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, _, _, err := cli.GetSpamPercent("tyuyu")
+		_, err := cli.GetMessageCharacteristics("tyuyu")
 		assert.EqualError(t, err, "request error: error")
 	})
 	t.Run("response does not contain data", func(t *testing.T) {
@@ -88,7 +88,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, _, _, err := cli.GetSpamPercent("ghgh")
+		_, err := cli.GetMessageCharacteristics("ghgh")
 		assert.EqualError(t, err, "response does not contain data")
 	})
 	t.Run("diff is not defined", func(t *testing.T) {
@@ -103,7 +103,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, _, _, err := cli.GetSpamPercent("")
+		_, err := cli.GetMessageCharacteristics("")
 		assert.EqualError(t, err, "message is not defined")
 	})
 	t.Run("pass", func(t *testing.T) {
@@ -115,16 +115,25 @@ func Test_GetCommitMsg(t *testing.T) {
 		client := mock_giga.NewMockIGigaClient(c)
 		client.EXPECT().AuthWithContext(gomock.Any()).Return(nil)
 		client.EXPECT().ChatWithContext(gomock.Any(), gomock.Any()).Return(&gigachat.ChatResponse{
-			Choices: []gigachat.Choice{{Message: gigachat.Message{Content: "89|в сообщении фигурирует фраза про криптовалюту и заработок"}}},
+			Choices: []gigachat.Choice{{Message: gigachat.Message{Content: `
+								{
+								  "is_spam": true,
+								  "spam_reason": "Сообщение содержит рекламу сомнительного заработка и внешнюю ссылку",
+								  "is_toxic": false,
+								  "toxic_reason": "Нет признаков агрессии или оскорблений.",
+								  "is_offtopic": true,
+								  "offtopic_reason": "Тематика сообщения не связана с IT и не относится к текущему обсуждению."
+								}`}}},
 		}, nil)
 
 		cli, _ := NewGigaClient(context.Background(), "==")
 		cli.client = client
 
-		s, perc, r, err := cli.GetSpamPercent("hjhj")
+		analysis, err := cli.GetMessageCharacteristics("hjhj")
 		assert.NoError(t, err)
-		assert.Equal(t, "в сообщении фигурирует фраза про криптовалюту и заработок", r)
-		assert.True(t, s)
-		assert.Equal(t, perc, 89)
+
+		if assert.True(t, analysis.IsSpam) {
+			assert.Equal(t, "Сообщение содержит рекламу сомнительного заработка и внешнюю ссылку", analysis.SpamReason)
+		}
 	})
 }

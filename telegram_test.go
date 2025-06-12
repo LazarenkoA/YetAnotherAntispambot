@@ -106,8 +106,8 @@ func Test_GetRandUserByWeight(t *testing.T) {
 		telega := &Telega{users: map[int64]map[int64]UserInfo{
 			000: {
 				111: UserInfo{ID: 111, Weight: 0},
-				222: UserInfo{ID: 222, Weight: 1},
-				333: UserInfo{ID: 333, Weight: 2},
+				222: UserInfo{ID: 222, Weight: 3},
+				333: UserInfo{ID: 333, Weight: 4},
 			},
 		}, logger: slog.Default()}
 
@@ -118,15 +118,15 @@ func Test_GetRandUserByWeight(t *testing.T) {
 		}
 
 		assert.Equal(t, float64(0), roundToTens(float64(check[111]/100000)*100))
-		assert.Equal(t, float64(30), roundToTens(float64(check[222]/10000)*100))
-		assert.Equal(t, float64(70), roundToTens(float64(check[333]/10000)*100))
+		assert.Equal(t, float64(40), roundToTens(float64(check[222]/10000)*100))
+		assert.Equal(t, float64(60), roundToTens(float64(check[333]/10000)*100))
 	})
 	t.Run("test2", func(t *testing.T) {
 		telega := &Telega{users: map[int64]map[int64]UserInfo{
 			000: {
-				111: UserInfo{ID: 111, Weight: 0},
-				222: UserInfo{ID: 222, Weight: 0},
-				333: UserInfo{ID: 333, Weight: 0},
+				111: UserInfo{ID: 111, Weight: 4},
+				222: UserInfo{ID: 222, Weight: 4},
+				333: UserInfo{ID: 333, Weight: 4},
 			},
 		}, logger: slog.Default()}
 
@@ -143,9 +143,9 @@ func Test_GetRandUserByWeight(t *testing.T) {
 	t.Run("test3", func(t *testing.T) {
 		telega := &Telega{users: map[int64]map[int64]UserInfo{
 			000: {
-				111: UserInfo{ID: 111, Weight: 0},
-				222: UserInfo{ID: 222, Weight: 0},
-				333: UserInfo{ID: 333, Weight: 0},
+				111: UserInfo{ID: 111, Weight: 4},
+				222: UserInfo{ID: 222, Weight: 4},
+				333: UserInfo{ID: 333, Weight: 44},
 			},
 		}, logger: slog.Default()}
 

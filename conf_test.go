@@ -2,8 +2,10 @@ package app
 
 import (
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/time/rate"
 	"os"
 	"testing"
+	"time"
 )
 
 func Test_Conf(t *testing.T) {
@@ -22,4 +24,16 @@ func Test_Conf(t *testing.T) {
 	assert.Equal(t, "Что вы видите на картинке?", conf.Question.Txt)
 	assert.Equal(t, "<ключ можно получить https://developers.sber.ru>", conf.AI.GigaChat.AuthKey)
 	assert.Equal(t, "(?i).*(PORNO|ПОРНО).*", conf.BlockMembers.UserNameRegExp)
+}
+
+func Test_rate_limiter(t *testing.T) {
+	s := rate.Sometimes{Interval: time.Millisecond * 50}
+	count := 0
+
+	for range 100 {
+		s.Do(func() { count++ })
+		time.Sleep(time.Millisecond * 10)
+	}
+
+	assert.Equal(t, 20, count)
 }

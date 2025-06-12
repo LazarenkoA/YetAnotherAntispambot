@@ -1,6 +1,8 @@
 module Antispam
 
-go 1.23
+go 1.23.0
+
+toolchain go1.24.1
 
 //replace github.com/paulrzcz/go-gigachat => ../go-gigachat
 
@@ -32,5 +34,6 @@ require (
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.19.0 // indirect
+	golang.org/x/time v0.12.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

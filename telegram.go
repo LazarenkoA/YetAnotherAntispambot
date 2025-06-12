@@ -610,10 +610,12 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 		return
 	}
 
-	if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
-		wd.logger.Debug(fmt.Sprintf("user: %s in chat: %s skipped, userWeight: %d", msg.From.String(), msg.Chat.Title, userWeight))
-		return
-	}
+	wd.logger.Debug("message AI analysis")
+
+	//if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
+	//	wd.logger.Debug(fmt.Sprintf("user: %s in chat: %s skipped, userWeight: %d", msg.From.String(), msg.Chat.Title, userWeight))
+	//	return
+	//}
 
 	c := wd.gigaClient(msg.Chat.ID, conf.AI.GigaChat.AuthKey)
 	analysis, err := c.GetMessageCharacteristics(strings.ReplaceAll(msg.Text, "\n", " "))
@@ -1097,6 +1099,10 @@ func (wd *Telega) GetRandUserByWeight(chatID, excludeUserID int64) (result *User
 	allUsers = lo.Filter[UserInfo](allUsers, func(item UserInfo, _ int) bool {
 		return item.Weight > 2
 	})
+
+	if len(allUsers) == 0 {
+		return
+	}
 
 	wd.logger.WithGroup("GetRandUserByWeight").With("chatID", chatID).Debug(fmt.Sprintf("users len - %d", len(allUsers)))
 
