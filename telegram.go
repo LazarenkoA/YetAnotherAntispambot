@@ -624,13 +624,13 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 		return
 	}
 
-	if analysis.IsToxic {
-		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:  %s", analysis.ToxicReason), "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	if analysis.HatePercent >= 70 {
+		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:\n%s", analysis.HateReason), "", msg.Chat.ID, Buttons{}, msg.MessageID)
 	}
 
-	if analysis.IsOffTopic {
-		wd.ReplyMsg("Ваше сообщение не относится к тематике чата", "", msg.Chat.ID, Buttons{}, msg.MessageID)
-	}
+	//if analysis.IsOffTopic {
+	//	wd.ReplyMsg("Ваше сообщение не относится к тематике чата", "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	//}
 }
 
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
