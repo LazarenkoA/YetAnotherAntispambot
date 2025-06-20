@@ -22,8 +22,8 @@ func Test_Conf(t *testing.T) {
 	assert.Equal(t, "Я пожалуй пойду", conf.KickCaption)
 	assert.Equal(t, 3, len(conf.Answers))
 	assert.Equal(t, "Что вы видите на картинке?", conf.Question.Txt)
-	assert.Equal(t, "<ключ можно получить https://developers.sber.ru>", conf.AI.GigaChat.AuthKey)
-	assert.Equal(t, "(?i).*(PORNO|ПОРНО).*", conf.BlockMembers.UserNameRegExp)
+	assert.Len(t, conf.AI, 2)
+	assert.Equal(t, "(?i).*([ПPР][OО0][PРR][NHН][OО0]).*|.*([ПPР][NHН][PРR][NHН][OО0]).*", conf.BlockMembers.UserNameRegExp)
 }
 
 func Test_rate_limiter(t *testing.T) {

@@ -491,7 +491,7 @@ func readConf(wd *Telega, chatID int64) *Conf {
 
 	conf, err := LoadConf([]byte(confStr))
 	if err != nil {
-		wd.logger.Error(errors.Wrap(err, "LoadConf error").Error())
+		wd.logger.Error(errors.Wrap(err, "LoadConf error").Error(), "chatID", chatID)
 		return nil
 	}
 	return conf

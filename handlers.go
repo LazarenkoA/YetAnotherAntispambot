@@ -19,28 +19,15 @@ var (
 
 func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 	// пример команды
-	// /checkAI::Здраствуйте!  Нужны люди на удалённый проект, от 500$ в неделю, 2-3 часа в день, 18+. Жду в личке::MTZmODdlMmU...xLTM0OWE0MmE1NDJiNg==
-	conf := readConf(wd, chatID)
-	authKey := ""
-
-	if conf != nil {
-		authKey = conf.AI.GigaChat.AuthKey
-	}
+	// /checkAI::Здраствуйте!  Нужны люди на удалённый проект, от 500$ в неделю, 2-3 часа в день, 18+. Жду в личке::gigachat::MTZmODdlMmU...xLTM0OWE0MmE1NDJiNg==
 
 	split := strings.Split(msg.Text, "::")
-	if len(split) >= 3 {
-		authKey = strings.TrimSpace(split[2])
-	} else if len(split) < 2 {
+	if len(split) < 4 {
 		wd.SendMsg("Некорректный формат сообщения", "", chatID, Buttons{})
 		return
 	}
 
-	if authKey == "" {
-		wd.SendMsg("Не определен authKey для giga chat", "", chatID, Buttons{})
-		return
-	}
-
-	analysis, err := wd.gigaClient(chatID, authKey).GetMessageCharacteristics(split[1])
+	analysis, err := wd.aiClient(chatID, []AIConf{{Name: split[2], APIKey: split[3]}})(split[1])
 	if err != nil {
 		wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 	} else {

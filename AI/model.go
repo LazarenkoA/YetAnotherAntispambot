@@ -1,4 +1,4 @@
-package giga
+package AI
 
 type MessageAnalysis struct {
 	IsSpam         bool   `json:"is_spam"`

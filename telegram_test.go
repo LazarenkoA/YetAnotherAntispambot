@@ -1,10 +1,15 @@
 package app
 
 import (
+	"Antispam/AI"
+	"Antispam/AI/deepseek"
+	"Antispam/AI/giga"
 	mock_app "Antispam/mock"
 	"context"
+	"github.com/agiledragon/gomonkey/v2"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/golang/mock/gomock"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"log/slog"
 	"math"
@@ -174,6 +179,47 @@ func Test_GetRandUserByWeight(t *testing.T) {
 	//		tmp[user.ID]++
 	//	}
 	//})
+}
+
+func Test_aiClient(t *testing.T) {
+	c := gomock.NewController(t)
+	defer c.Finish()
+
+	t.Run("", func(t *testing.T) {
+		telega := &Telega{}
+		f := telega.aiClient(123, []AIConf{{}, {}})
+		result, err := f("")
+		assert.Nil(t, result)
+		assert.Error(t, err)
+	})
+	t.Run("", func(t *testing.T) {
+		p := gomonkey.ApplyFunc(giga.NewGigaClient, func(ctx context.Context, authKey string) (*giga.Client, error) {
+			return new(giga.Client), nil
+		})
+		p.ApplyFunc(deepseek.NewDSClient, func(ctx context.Context, apiKey string) (*deepseek.Client, error) {
+			return new(deepseek.Client), nil
+		})
+		defer p.Reset()
+
+		giga := mock_app.NewMockIMessageAnalysis(c)
+		ds := mock_app.NewMockIMessageAnalysis(c)
+
+		giga.EXPECT().GetMessageCharacteristics("test").Return(nil, errors.New("error"))
+		ds.EXPECT().GetMessageCharacteristics("test").Return(&AI.MessageAnalysis{
+			IsSpam: true,
+		}, nil)
+
+		telega := &Telega{logger: slog.Default()}
+		telega.aiClient(123, []AIConf{{Name: "deepseek"}, {Name: "gigachat"}})
+		telega.pool.Store(int64(123), []IMessageAnalysis{giga, ds})
+
+		f := telega.aiClient(123, []AIConf{{Name: "deepseek"}, {Name: "gigachat"}})
+		result, err := f("test")
+		assert.NoError(t, err)
+		if assert.NotNil(t, result) {
+			assert.True(t, result.IsSpam)
+		}
+	})
 }
 
 func roundToTens(n float64) float64 {

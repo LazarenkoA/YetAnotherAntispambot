@@ -15,6 +15,11 @@ type question struct {
 	Img string `yaml:"img"`
 }
 
+type AIConf struct {
+	Name   string `yaml:"name"`
+	APIKey string `yaml:"apiKey"`
+}
+
 type Conf struct {
 	// Обратный отчет в секундах
 	Timeout     int    `yaml:"timeout"`
@@ -26,13 +31,7 @@ type Conf struct {
 	BlockMembers struct {
 		UserNameRegExp string `yaml:"userNameRegExp"`
 	} `yaml:"blockMembers"`
-	AI struct {
-		GigaChat struct {
-			ClientID     string `yaml:"clientID"`
-			ClientSecret string `yaml:"clientSecret"`
-			AuthKey      string `yaml:"authKey"`
-		} `yaml:"gigachat"`
-	} `yaml:"ai"`
+	AI []AIConf `yaml:"ai"`
 }
 
 func LoadConfFromFile(confpath string) (result *Conf, err error) {
@@ -67,10 +66,14 @@ answers:
 countVoted: 10 # количество проголосовавщих за бан. По умолчанию 5
 
 blockMembers: # не обязательная настройка, можно задать регулярное выражение по которому будет баниться никнейм или ФИО. Бан будет сразу при вступлении, без вопроса
-  userNameRegExp: "(?i).*(PORNO|ПОРНО).*" # проверка будет выполняться по полям UserName, FirstName, LastName
+  userNameRegExp: "(?i).*([ПPР][OО0][PРR][NHН][OО0]).*|.*([ПPР][NHН][PРR][NHН][OО0]).*" # проверка будет выполняться по полям UserName, FirstName, LastName
 
-ai: # если настройка задана антиспам будет анализировать первое отправленое сообщение от пользователя на предмет спам - не спам. Так же проверка на токсичность и на оффтоп
-  gigachat:
-    authKey: <ключ можно получить https://developers.sber.ru>
+# если настройка задана антиспам будет анализировать первое отправвленое сообщение от пользователя на предмет спам - не спам  
+# поддерживается deepseek, gigachat. Если заданы обе настройки, API вызывааться будут в порядке заданном в конфиге. Если первый АПИ вернул ошибку последует запрос в следующий
+ai:
+  - name: deepseek # будет использован первый
+    apiKey: <ключ можно получить https://platform.deepseek.com/api_keys>
+  - name: gigachat # будет использован вторым если первый вернул ошибку
+    apiKey: <ключ можно получить https://developers.sber.ru>
 `
 }

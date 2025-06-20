@@ -1,8 +1,10 @@
 package app
 
 import (
+	"Antispam/AI"
+	"Antispam/AI/deepseek"
+	"Antispam/AI/giga"
 	"Antispam/db"
-	"Antispam/giga"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -70,6 +72,10 @@ type IRedis interface {
 	DeleteItems(key, value string) error
 	AppendItems(key, value string)
 	KeyExists(key string) bool
+}
+
+type IMessageAnalysis interface {
+	GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error)
 }
 
 type Telega struct {
@@ -390,7 +396,7 @@ func (wd *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bo
 	return false
 }
 
-func (wd *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context, cancel context.CancelFunc) {
+func (wd *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context) {
 	tick := time.NewTicker(wd.getDelay())
 	defer func() {
 		tick.Stop()
@@ -606,7 +612,7 @@ func (wd *Telega) deleteAllLastMsg() {
 
 // CheckMessage проверяет сообщение на токсичность и оффтоп
 func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
-	if msg == nil || conf == nil || conf.AI.GigaChat.AuthKey == "" {
+	if msg == nil || conf == nil || len(conf.AI) == 0 {
 		return
 	}
 
@@ -617,8 +623,8 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 	//	return
 	//}
 
-	c := wd.gigaClient(msg.Chat.ID, conf.AI.GigaChat.AuthKey)
-	analysis, err := c.GetMessageCharacteristics(strings.ReplaceAll(msg.Text, "\n", " "))
+	getMessageCharacteristics := wd.aiClient(msg.Chat.ID, conf.AI)
+	analysis, err := getMessageCharacteristics(strings.ReplaceAll(msg.Text, "\n", " "))
 	if err != nil {
 		wd.logger.Error(errors.Wrap(err, "GetMessageCharacteristics error").Error())
 		return
@@ -626,6 +632,8 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 
 	if analysis.HatePercent >= 70 {
 		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:\n%s", analysis.HateReason), "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	} else if analysis.HatePercent >= 10 {
+		wd.logger.Info(fmt.Sprintf("msg: %s, HatePercent: %d, HateReason: %s", msg.Text, analysis.HatePercent, analysis.HateReason))
 	}
 
 	//if analysis.IsOffTopic {
@@ -634,7 +642,7 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 }
 
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
-	if conf == nil || conf.AI.GigaChat.AuthKey == "" {
+	if conf == nil || len(conf.AI) == 0 {
 		return false, ""
 	}
 
@@ -648,8 +656,8 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 		return false, ""
 	}
 
-	c := wd.gigaClient(chatID, conf.AI.GigaChat.AuthKey)
-	analysis, err := c.GetMessageCharacteristics(strings.ReplaceAll(msg, "\n", " "))
+	getMessageCharacteristics := wd.aiClient(chatID, conf.AI)
+	analysis, err := getMessageCharacteristics(strings.ReplaceAll(msg, "\n", " "))
 	if err != nil {
 		logger.Error(errors.Wrap(err, "getSpamPercent error").Error())
 		return false, ""
@@ -666,15 +674,46 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	return analysis.IsSpam, analysis.SpamReason
 }
 
-func (wd *Telega) gigaClient(chatID int64, authKey string) *giga.Client {
-	if client, ok := wd.pool.Load(chatID); ok {
-		return client.(*giga.Client)
+func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText string) (*AI.MessageAnalysis, error) {
+	if clients, ok := wd.pool.Load(chatID); ok {
+		return func(msgText string) (*AI.MessageAnalysis, error) {
+			return wd.getMessageCharacteristicsWrapper(clients, msgText)
+		}
 	}
 
-	client, _ := giga.NewGigaClient(wd.ctx, authKey)
-	wd.pool.Store(chatID, client)
+	var clients []IMessageAnalysis
+	for _, c := range aiConf {
+		switch c.Name {
+		case "deepseek":
+			if ds, err := deepseek.NewDSClient(wd.ctx, c.APIKey); err == nil {
+				clients = append(clients, ds)
+			}
+		case "gigachat":
+			if g, err := giga.NewGigaClient(wd.ctx, c.APIKey); err == nil {
+				clients = append(clients, g)
+			}
+		}
+	}
 
-	return client
+	wd.pool.Store(chatID, clients)
+
+	return func(msgText string) (*AI.MessageAnalysis, error) {
+		return wd.getMessageCharacteristicsWrapper(clients, msgText)
+	}
+}
+
+func (wd *Telega) getMessageCharacteristicsWrapper(client any, msgText string) (*AI.MessageAnalysis, error) {
+	if clients, ok := client.([]IMessageAnalysis); ok {
+		for _, c := range clients {
+			if r, err := c.GetMessageCharacteristics(msgText); err == nil {
+				return r, nil
+			} else {
+				wd.logger.Error(fmt.Sprintf("ai request error: %s", err))
+			}
+		}
+	}
+
+	return nil, errors.New("failed to process AI request")
 }
 
 func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {

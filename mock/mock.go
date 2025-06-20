@@ -5,6 +5,7 @@
 package mock_app
 
 import (
+	AI "Antispam/AI"
 	reflect "reflect"
 	time "time"
 
@@ -185,4 +186,42 @@ func (m *MockIRedis) StringMap(key string) (map[string]string, error) {
 func (mr *MockIRedisMockRecorder) StringMap(key interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StringMap", reflect.TypeOf((*MockIRedis)(nil).StringMap), key)
+}
+
+// MockIMessageAnalysis is a mock of IMessageAnalysis interface.
+type MockIMessageAnalysis struct {
+	ctrl     *gomock.Controller
+	recorder *MockIMessageAnalysisMockRecorder
+}
+
+// MockIMessageAnalysisMockRecorder is the mock recorder for MockIMessageAnalysis.
+type MockIMessageAnalysisMockRecorder struct {
+	mock *MockIMessageAnalysis
+}
+
+// NewMockIMessageAnalysis creates a new mock instance.
+func NewMockIMessageAnalysis(ctrl *gomock.Controller) *MockIMessageAnalysis {
+	mock := &MockIMessageAnalysis{ctrl: ctrl}
+	mock.recorder = &MockIMessageAnalysisMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockIMessageAnalysis) EXPECT() *MockIMessageAnalysisMockRecorder {
+	return m.recorder
+}
+
+// GetMessageCharacteristics mocks base method.
+func (m *MockIMessageAnalysis) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMessageCharacteristics", msgText)
+	ret0, _ := ret[0].(*AI.MessageAnalysis)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMessageCharacteristics indicates an expected call of GetMessageCharacteristics.
+func (mr *MockIMessageAnalysisMockRecorder) GetMessageCharacteristics(msgText interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageCharacteristics", reflect.TypeOf((*MockIMessageAnalysis)(nil).GetMessageCharacteristics), msgText)
 }

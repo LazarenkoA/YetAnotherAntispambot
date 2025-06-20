@@ -1,7 +1,7 @@
 package giga
 
 import (
-	mock_giga "Antispam/giga/mock"
+	"Antispam/AI/giga/mock"
 	"context"
 	"testing"
 
