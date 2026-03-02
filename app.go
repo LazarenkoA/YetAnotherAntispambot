@@ -174,6 +174,7 @@ func Run(ctx_ context.Context) error {
 						delete(wd.hooks, key)
 					}
 				}
+				wd.storeMessage(update.Message)
 			}
 		}
 
@@ -195,7 +196,7 @@ func Run(ctx_ context.Context) error {
 				wd.deleteSpam(user, r, msg.MessageID, chatID)
 			} else {
 				limiter.Do(func() {
-					wd.CheckMessage(msg, readConf(wd, chatID))
+					wd.CheckMessageModeration(msg, readConf(wd, chatID))
 				})
 			}
 		}

@@ -212,16 +212,16 @@ func (m *MockIMessageAnalysis) EXPECT() *MockIMessageAnalysisMockRecorder {
 }
 
 // GetMessageCharacteristics mocks base method.
-func (m *MockIMessageAnalysis) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error) {
+func (m *MockIMessageAnalysis) GetMessageCharacteristics(msgText, tread string) (*AI.MessageAnalysis, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMessageCharacteristics", msgText)
+	ret := m.ctrl.Call(m, "GetMessageCharacteristics", msgText, tread)
 	ret0, _ := ret[0].(*AI.MessageAnalysis)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetMessageCharacteristics indicates an expected call of GetMessageCharacteristics.
-func (mr *MockIMessageAnalysisMockRecorder) GetMessageCharacteristics(msgText interface{}) *gomock.Call {
+func (mr *MockIMessageAnalysisMockRecorder) GetMessageCharacteristics(msgText, tread interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageCharacteristics", reflect.TypeOf((*MockIMessageAnalysis)(nil).GetMessageCharacteristics), msgText)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageCharacteristics", reflect.TypeOf((*MockIMessageAnalysis)(nil).GetMessageCharacteristics), msgText, tread)
 }

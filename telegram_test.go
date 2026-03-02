@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"log/slog"
 	"math"
+	"net/http"
+	"net/http/cookiejar"
 	"testing"
 	"time"
 )
@@ -185,10 +187,12 @@ func Test_aiClient(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
 
+	http.Client{Jar: cookiejar.New(nil)}
+
 	t.Run("", func(t *testing.T) {
 		telega := &Telega{}
 		f := telega.aiClient(123, []AIConf{{}, {}})
-		result, err := f("")
+		result, err := f("", "")
 		assert.Nil(t, result)
 		assert.Error(t, err)
 	})
@@ -204,8 +208,8 @@ func Test_aiClient(t *testing.T) {
 		giga := mock_app.NewMockIMessageAnalysis(c)
 		ds := mock_app.NewMockIMessageAnalysis(c)
 
-		giga.EXPECT().GetMessageCharacteristics("test").Return(nil, errors.New("error"))
-		ds.EXPECT().GetMessageCharacteristics("test").Return(&AI.MessageAnalysis{
+		giga.EXPECT().GetMessageCharacteristics("test", "").Return(nil, errors.New("error"))
+		ds.EXPECT().GetMessageCharacteristics("test", "").Return(&AI.MessageAnalysis{
 			IsSpam: true,
 		}, nil)
 
@@ -214,7 +218,7 @@ func Test_aiClient(t *testing.T) {
 		telega.pool.Store(int64(123), []IMessageAnalysis{giga, ds})
 
 		f := telega.aiClient(123, []AIConf{{Name: "deepseek"}, {Name: "gigachat"}})
-		result, err := f("test")
+		result, err := f("test", "")
 		assert.NoError(t, err)
 		if assert.NotNil(t, result) {
 			assert.True(t, result.IsSpam)

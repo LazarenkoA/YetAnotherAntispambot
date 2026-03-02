@@ -1,8 +1,11 @@
 package AI
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/samber/lo"
+)
 
-func PromptGetSpamPercent(msg string) string {
+func PromptGetSpamPercent(msg, tread string) string {
 	return fmt.Sprintf(`По одному сообщению ты должен определить его характеристики и обосновать выводы.
 								
 								Определи и выведи результат строго в формате JSON:
@@ -29,5 +32,8 @@ func PromptGetSpamPercent(msg string) string {
 								ПЕРЕД ОТВЕТОМ ПРОВЕРЬ JSON НА ВАЛИДНОСТЬ
 
 								Вот сообщение для анализа:
-								"%s"`, msg)
+								"%s"
+
+								Вот вся переписка, УЧИТЫВАЙ КОНТЕКСТ:
+								"%s"`, msg, lo.If(tread == "", "----").Else(tread))
 }

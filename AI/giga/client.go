@@ -34,7 +34,7 @@ func NewGigaClient(ctx context.Context, authKey string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error) {
+func (c *Client) GetMessageCharacteristics(msgText, tread string) (*AI.MessageAnalysis, error) {
 	err := c.client.AuthWithContext(c.ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "auth error")
@@ -55,7 +55,7 @@ func (c *Client) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis,
 			},
 			{
 				Role:    "user",
-				Content: AI.PromptGetSpamPercent(msgText),
+				Content: AI.PromptGetSpamPercent(msgText, ""),
 			},
 		},
 		Temperature: AI.Ptr(0.7),

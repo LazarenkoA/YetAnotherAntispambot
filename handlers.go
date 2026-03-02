@@ -27,7 +27,8 @@ func (wd *Telega) checkAI(chatID int64, msg *tgbotapi.Message) {
 		return
 	}
 
-	analysis, err := wd.aiClient(chatID, []AIConf{{Name: split[2], APIKey: split[3]}})(split[1])
+	wd.pool.Delete(chatID)
+	analysis, err := wd.aiClient(chatID, []AIConf{{Name: split[2], APIKey: split[3]}})(split[1], "")
 	if err != nil {
 		wd.SendMsg(fmt.Sprintf("Произошла ошибка: %s", err.Error()), "", chatID, Buttons{})
 	} else {

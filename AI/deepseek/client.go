@@ -32,7 +32,7 @@ func NewDSClient(ctx context.Context, apiKey string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error) {
+func (c *Client) GetMessageCharacteristics(msgText, tread string) (*AI.MessageAnalysis, error) {
 	logger := slog.Default().With("name", "deepseek")
 
 	chatReq := &request.ChatCompletionsRequest{
@@ -45,7 +45,7 @@ func (c *Client) GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis,
 			},
 			{
 				Role:    "user",
-				Content: AI.PromptGetSpamPercent(msgText),
+				Content: AI.PromptGetSpamPercent(msgText, tread),
 			},
 		},
 	}

@@ -75,7 +75,7 @@ type IRedis interface {
 }
 
 type IMessageAnalysis interface {
-	GetMessageCharacteristics(msgText string) (*AI.MessageAnalysis, error)
+	GetMessageCharacteristics(msgText, tread string) (*AI.MessageAnalysis, error)
 }
 
 type Telega struct {
@@ -610,13 +610,13 @@ func (wd *Telega) deleteAllLastMsg() {
 	wd.lastMsg = map[string]string{}
 }
 
-// CheckMessage проверяет сообщение на токсичность и оффтоп
-func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
+// CheckMessageModeration проверяет сообщение на токсичность и оффтоп
+func (wd *Telega) CheckMessageModeration(msg *tgbotapi.Message, conf *Conf) {
 	if msg == nil || conf == nil || len(conf.AI) == 0 {
 		return
 	}
 
-	wd.logger.Debug("message AI analysis")
+	wd.logger.Debug("message AI moderation analysis")
 
 	//if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
 	//	wd.logger.Debug(fmt.Sprintf("user: %s in chat: %s skipped, userWeight: %d", msg.From.String(), msg.Chat.Title, userWeight))
@@ -624,7 +624,7 @@ func (wd *Telega) CheckMessage(msg *tgbotapi.Message, conf *Conf) {
 	//}
 
 	getMessageCharacteristics := wd.aiClient(msg.Chat.ID, conf.AI)
-	analysis, err := getMessageCharacteristics(strings.ReplaceAll(msg.Text, "\n", " "))
+	analysis, err := getMessageCharacteristics(msg.Text, wd.getThreadMessages(msg))
 	if err != nil {
 		wd.logger.Error(errors.Wrap(err, "GetMessageCharacteristics error").Error())
 		return
@@ -657,7 +657,7 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	}
 
 	getMessageCharacteristics := wd.aiClient(chatID, conf.AI)
-	analysis, err := getMessageCharacteristics(strings.ReplaceAll(msg, "\n", " "))
+	analysis, err := getMessageCharacteristics(strings.ReplaceAll(msg, "\n", " "), "")
 	if err != nil {
 		logger.Error(errors.Wrap(err, "getSpamPercent error").Error())
 		return false, ""
@@ -674,10 +674,10 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	return analysis.IsSpam, analysis.SpamReason
 }
 
-func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText string) (*AI.MessageAnalysis, error) {
+func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText, tread string) (*AI.MessageAnalysis, error) {
 	if clients, ok := wd.pool.Load(chatID); ok {
-		return func(msgText string) (*AI.MessageAnalysis, error) {
-			return wd.getMessageCharacteristicsWrapper(clients, msgText)
+		return func(msgText, tread string) (*AI.MessageAnalysis, error) {
+			return wd.getMessageCharacteristicsWrapper(clients, msgText, tread)
 		}
 	}
 
@@ -697,15 +697,15 @@ func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText string) (
 
 	wd.pool.Store(chatID, clients)
 
-	return func(msgText string) (*AI.MessageAnalysis, error) {
-		return wd.getMessageCharacteristicsWrapper(clients, msgText)
+	return func(msgText, tread string) (*AI.MessageAnalysis, error) {
+		return wd.getMessageCharacteristicsWrapper(clients, msgText, tread)
 	}
 }
 
-func (wd *Telega) getMessageCharacteristicsWrapper(client any, msgText string) (*AI.MessageAnalysis, error) {
+func (wd *Telega) getMessageCharacteristicsWrapper(client any, msgText, tread string) (*AI.MessageAnalysis, error) {
 	if clients, ok := client.([]IMessageAnalysis); ok {
 		for _, c := range clients {
-			if r, err := c.GetMessageCharacteristics(msgText); err == nil {
+			if r, err := c.GetMessageCharacteristics(msgText, tread); err == nil {
 				return r, nil
 			} else {
 				wd.logger.Error(fmt.Sprintf("ai request error: %s", err))
