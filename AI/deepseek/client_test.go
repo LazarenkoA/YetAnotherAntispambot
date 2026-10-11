@@ -34,7 +34,7 @@ func Test_GetMessageCharacteristics(t *testing.T) {
 		},
 	}, nil)
 
-	result, err := ds.GetMessageCharacteristics("test")
+	result, err := ds.GetMessageCharacteristics("test", "")
 	assert.NoError(t, err)
 	if assert.NotNil(t, result) {
 		assert.False(t, result.IsSpam)

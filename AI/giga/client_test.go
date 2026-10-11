@@ -56,7 +56,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, err := cli.GetMessageCharacteristics("")
+		_, err := cli.GetMessageCharacteristics("", "")
 		assert.EqualError(t, err, "auth error: error")
 	})
 	t.Run("req error", func(t *testing.T) {
@@ -72,7 +72,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, err := cli.GetMessageCharacteristics("tyuyu")
+		_, err := cli.GetMessageCharacteristics("tyuyu", "")
 		assert.EqualError(t, err, "request error: error")
 	})
 	t.Run("response does not contain data", func(t *testing.T) {
@@ -88,7 +88,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, err := cli.GetMessageCharacteristics("ghgh")
+		_, err := cli.GetMessageCharacteristics("ghgh", "")
 		assert.EqualError(t, err, "response does not contain data")
 	})
 	t.Run("diff is not defined", func(t *testing.T) {
@@ -103,7 +103,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "111")
 		cli.client = client
 
-		_, err := cli.GetMessageCharacteristics("")
+		_, err := cli.GetMessageCharacteristics("", "")
 		assert.EqualError(t, err, "message is not defined")
 	})
 	t.Run("pass", func(t *testing.T) {
@@ -129,7 +129,7 @@ func Test_GetCommitMsg(t *testing.T) {
 		cli, _ := NewGigaClient(context.Background(), "==")
 		cli.client = client
 
-		analysis, err := cli.GetMessageCharacteristics("hjhj")
+		analysis, err := cli.GetMessageCharacteristics("hjhj", "")
 		assert.NoError(t, err)
 
 		if assert.True(t, analysis.IsSpam) {

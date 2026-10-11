@@ -7,14 +7,12 @@ import (
 	mock_app "Antispam/mock"
 	"context"
 	"github.com/agiledragon/gomonkey/v2"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/go-telegram/bot/models"
 	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"log/slog"
 	"math"
-	"net/http"
-	"net/http/cookiejar"
 	"testing"
 	"time"
 )
@@ -58,13 +56,13 @@ func Test_watchKilledUsers(t *testing.T) {
 func Test_SaveMember(t *testing.T) {
 	telega := &Telega{users: map[int64]map[int64]UserInfo{}, logger: slog.Default()}
 
-	telega.SaveMember(111, &tgbotapi.User{
+	telega.SaveMember(111, &models.User{
 		ID:       21212,
-		UserName: "test",
+		Username: "test",
 	})
-	telega.SaveMember(111, &tgbotapi.User{
+	telega.SaveMember(111, &models.User{
 		ID:       323333,
-		UserName: "test2",
+		Username: "test2",
 	})
 
 	assert.Equal(t, 1, len(telega.users))
@@ -72,13 +70,13 @@ func Test_SaveMember(t *testing.T) {
 	assert.Equal(t, 1, int(telega.users[111][323333].Weight))
 	assert.Equal(t, 1, int(telega.users[111][21212].Weight))
 
-	telega.SaveMember(111, &tgbotapi.User{
+	telega.SaveMember(111, &models.User{
 		ID:       323333,
-		UserName: "test2",
+		Username: "test2",
 	})
-	telega.SaveMember(111, &tgbotapi.User{
+	telega.SaveMember(111, &models.User{
 		ID:       323333,
-		UserName: "test2",
+		Username: "test2",
 	})
 
 	assert.Equal(t, 3, int(telega.users[111][323333].Weight))
@@ -186,8 +184,6 @@ func Test_GetRandUserByWeight(t *testing.T) {
 func Test_aiClient(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
-
-	http.Client{Jar: cookiejar.New(nil)}
 
 	t.Run("", func(t *testing.T) {
 		telega := &Telega{}

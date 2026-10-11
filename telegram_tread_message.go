@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/go-telegram/bot/models"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/pkg/errors"
 	"sort"
@@ -27,12 +27,12 @@ func init() {
 	messages = expirable.NewLRU[int, []storeMsgData](100, nil, time.Hour*24)
 }
 
-func (wd *Telega) getThreadMessages(msg *tgbotapi.Message) string {
+func (wd *Telega) getThreadMessages(msg *models.Message) string {
 	if msg == nil {
 		return ""
 	}
 
-	if v, ok := messages.Get(msg.MessageID); ok {
+	if v, ok := messages.Get(msg.ID); ok {
 		return wd.printGraph(v)
 	}
 
@@ -74,7 +74,7 @@ func (wd *Telega) printGraphHelper(result *strings.Builder, list map[int]storeMs
 }
 
 // storeMessage сохраняет сообщение в память, нужно для получение треда сообщения
-func (wd *Telega) storeMessage(msg *tgbotapi.Message) {
+func (wd *Telega) storeMessage(msg *models.Message) {
 	bdata, err := wd.toDataStore(msg)
 	if err != nil {
 		wd.logger.Error(err.Error())
@@ -88,7 +88,7 @@ func (wd *Telega) storeMessage(msg *tgbotapi.Message) {
 	}
 }
 
-func (wd *Telega) toDataStore(msg *tgbotapi.Message) (storeMsgData, error) {
+func (wd *Telega) toDataStore(msg *models.Message) (storeMsgData, error) {
 	text := msg.Text
 	if msg.Document != nil {
 		text = fmt.Sprintf("<document> %s", msg.Caption)
@@ -99,7 +99,7 @@ func (wd *Telega) toDataStore(msg *tgbotapi.Message) (storeMsgData, error) {
 	if msg.Sticker != nil {
 		text = "[sticker]"
 	}
-	if msg.Photo != nil {
+	if len(msg.Photo) > 0 {
 		text = fmt.Sprintf("[photo] %s", msg.Caption)
 	}
 	if msg.Poll != nil {
@@ -110,14 +110,14 @@ func (wd *Telega) toDataStore(msg *tgbotapi.Message) (storeMsgData, error) {
 	}
 
 	if strings.TrimSpace(text) == "" {
-		return storeMsgData{}, errors.New("text message is empty")
+		return storeMsgData{}, errors.New("data store text message is empty")
 	}
 
 	sdata := storeMsgData{
-		MessageID: msg.MessageID,
+		MessageID: msg.ID,
 		Txt:       text,
-		DateTime:  msg.Time().UTC(),
-		User:      msg.From.UserName,
+		DateTime:  time.Unix(int64(msg.Date), 0).UTC(),
+		User:      msg.From.Username,
 		ChatID:    msg.Chat.ID,
 	}
 
@@ -126,7 +126,7 @@ func (wd *Telega) toDataStore(msg *tgbotapi.Message) (storeMsgData, error) {
 	}
 
 	if msg.ReplyToMessage != nil {
-		sdata.ReplyToMessageID = msg.ReplyToMessage.MessageID
+		sdata.ReplyToMessageID = msg.ReplyToMessage.ID
 	}
 
 	return sdata, nil

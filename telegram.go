@@ -9,16 +9,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/go-telegram/bot/models"
 	"github.com/k0kubun/pp/v3"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"io"
-	"io/ioutil"
 	"log"
 	"log/slog"
 	"maps"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -30,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/go-telegram/bot"
 	uuid "github.com/nu7hatch/gouuid"
 )
 
@@ -42,7 +43,7 @@ type UserInfo struct {
 
 type Button struct {
 	caption string
-	handler func(*tgbotapi.Update, *Button) bool
+	handler func(*models.Update, *Button) bool
 	timer   int
 
 	// время начала таймера
@@ -53,7 +54,6 @@ type Button struct {
 const (
 	keyActiveMSG             = "keyActiveMSG"
 	keyActiveRandomModerator = "keyActiveRandomModerator"
-	promoteChatMember        = "promoteChatMember"
 	keyUsingOneTry           = "UsingOneTry"
 )
 
@@ -79,15 +79,16 @@ type IMessageAnalysis interface {
 }
 
 type Telega struct {
-	bot               *tgbotapi.BotAPI
-	callback          map[string]func(tgbotapi.Update) bool
-	hooks             map[string]func(tgbotapi.Update) bool
+	bot               *tgbotapi.Bot
+	callback          map[string]func(models.Update) bool
+	hooks             map[string]func(models.Update) bool
 	running           int32
 	r                 IRedis
 	pool              sync.Map
 	lastMsg           map[string]string // для хранения последнего сообщения по пользователю
 	mx                sync.RWMutex
 	httpServer        *http.Server
+	client            *http.Client // http-клиент с прокси (если задан PROXY_URL), используется для всех запросов к Telegram
 	users             map[int64]map[int64]UserInfo
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -101,12 +102,23 @@ type KilledInfo struct {
 	To       time.Time
 }
 
-func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result tgbotapi.UpdatesChannel, err error) {
-	wd.callback = map[string]func(tgbotapi.Update) bool{}
-	wd.hooks = map[string]func(tgbotapi.Update) bool{}
+func allowedUpdates() []string {
+	return []string{
+		models.AllowedUpdateMessage,
+		models.AllowedUpdateChatMember,
+		models.AllowedUpdateCallbackQuery,
+		models.AllowedUpdateChatJoinRequest,
+		models.AllowedUpdateMyChatMember,
+	}
+}
+
+func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (<-chan models.Update, error) {
+	wd.callback = map[string]func(models.Update) bool{}
+	wd.hooks = map[string]func(models.Update) bool{}
 	wd.users = map[int64]map[int64]UserInfo{}
 	wd.logger = slog.Default().With("name", "telegram")
 
+	var err error
 	wd.r, err = new(db.Redis).Create(redisAddr)
 	if err != nil {
 		return nil, errors.Wrap(err, "create redis")
@@ -122,7 +134,42 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result
 	wd.restoreUsersInfo()
 	go wd.watchKilledUsers(time.Minute)
 
-	wd.bot, err = tgbotapi.NewBotAPI(botToken)
+	updates := make(chan models.Update, 100)
+
+	opts := []tgbotapi.Option{
+		tgbotapi.WithAllowedUpdates(allowedUpdates()),
+		tgbotapi.WithDefaultHandler(func(ctx context.Context, b *tgbotapi.Bot, update *models.Update) {
+			if update == nil {
+				return
+			}
+			select {
+			case updates <- *update:
+			case <-ctx.Done():
+			}
+		}),
+	}
+	if debug {
+		opts = append(opts, tgbotapi.WithDebug())
+	}
+
+	if proxyURL != "" {
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, errors.Wrap(err, "parse PROXY_URL error")
+		}
+
+		wd.client = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(u), // поддерживаются http, https и socks5 прокси
+			},
+		}
+		// defaultPollTimeout из библиотеки (time.Minute), pollTimeout-1с уходит в getUpdates
+		opts = append(opts, tgbotapi.WithHTTPClient(time.Minute, wd.client))
+
+		wd.logger.Info(fmt.Sprintf("используется прокси: %s", proxyURL))
+	}
+
+	wd.bot, err = tgbotapi.New(botToken, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +180,9 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result
 		}
 	}
 
-	wd.bot.Debug = debug
-	wd.httpServer = &http.Server{Addr: ":" + port}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", wd.bot.WebhookHandler())
+	wd.httpServer = &http.Server{Addr: ":" + port, Handler: mux}
 	go wd.httpServer.ListenAndServe()
 
 	go wd.watchActiveRandomModerator(time.Minute)
@@ -142,73 +190,71 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (result
 	wd.logger.Info(fmt.Sprintf("listen port: %s, debug: %v", port, debug))
 
 	if !pollingMode {
-		var wh tgbotapi.WebhookConfig
+		whParams := &tgbotapi.SetWebhookParams{
+			URL:            webhookURL,
+			MaxConnections: 70,
+			AllowedUpdates: allowedUpdates(),
+		}
+
 		if certFilePath != "" {
-			f, err := os.Open(certFilePath)
+			b, err := os.ReadFile(certFilePath)
 			if err != nil {
 				return nil, errors.Wrap(err, "open cert error")
 			}
 
-			b, _ := io.ReadAll(f)
-			fileBytes := tgbotapi.FileBytes{Bytes: b}
-
-			wh, err = tgbotapi.NewWebhookWithCert(webhookURL, fileBytes)
-			if err != nil {
-				return nil, errors.Wrap(err, "get webhook error")
-			}
-		} else {
-			if wh, err = tgbotapi.NewWebhook(webhookURL); err != nil {
-				return nil, errors.Wrap(err, "get webhook error")
+			whParams.Certificate = &models.InputFileUpload{
+				Filename: filepath.Base(certFilePath),
+				Data:     bytes.NewReader(b),
 			}
 		}
 
-		wh.MaxConnections = 70
-		wh.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-		_, err = wd.bot.Request(wh)
-		if err != nil {
+		if _, err = wd.bot.SetWebhook(wd.ctx, whParams); err != nil {
 			return nil, errors.Wrap(err, "request error")
 		}
 
-		return wd.bot.ListenForWebhook("/"), nil // вебхук
+		go wd.bot.StartWebhook(wd.ctx) // вебхук
+
+		return updates, nil
 	} else {
-		_, err = wd.bot.Request(&tgbotapi.DeleteWebhookConfig{}) // при использовании полинга
-		u := tgbotapi.NewUpdate(0)
-		u.Timeout = 60
-		u.AllowedUpdates = []string{"message", "chat_member", "callback_query", "chat_join_request", "my_chat_member"}
-		return wd.bot.GetUpdatesChan(u), nil // полинг
+		_, _ = wd.bot.DeleteWebhook(wd.ctx, &tgbotapi.DeleteWebhookParams{}) // при использовании полинга
+		go wd.bot.Start(wd.ctx)                                              // полинг
+		return updates, nil
 	}
 }
 
-func (wd *Telega) SendTTLMsg(msg string, imgURL string, chatID int64, buttons Buttons, ttl time.Duration) (*tgbotapi.Message, error) {
-	if m, err := wd.SendMsg(msg, imgURL, chatID, buttons); err != nil {
+func (wd *Telega) SendTTLMsg(msg string, chatID int64, buttons Buttons, ttl time.Duration) (*models.Message, error) {
+	m, err := wd.SendMsg(wd.ctx, msg, chatID, 0, buttons)
+	if err != nil {
 		return nil, err
-	} else {
-		go func() {
-			time.Sleep(ttl)
-			wd.DeleteMessage(chatID, m.MessageID)
-		}()
-
-		return m, nil
 	}
+
+	go func() {
+		time.Sleep(ttl)
+		wd.DeleteMessage(chatID, m.ID)
+	}()
+
+	return m, nil
 }
 
-func (wd *Telega) SendMsg(msg string, imgURL string, chatID int64, buttons Buttons) (*tgbotapi.Message, error) {
-	if imgURL != "" {
-		if path, err := downloadFile(imgURL); err == nil {
-			defer os.RemoveAll(path)
-
-			newmsg := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(path))
-			newmsg.Caption = msg
-			newmsg.ParseMode = "HTML"
-			return wd.createButtonsAndSend(&newmsg, buttons)
-		} else {
-			return &tgbotapi.Message{}, err
+func (wd *Telega) SendMsg(ctx context.Context, msg string, chatID, userID int64, buttons Buttons) (*models.Message, error) {
+	var ephemeral *models.EphemeralMessageParameters
+	if userID != 0 {
+		ephemeral = &models.EphemeralMessageParameters{
+			ReceiverUserID: userID,
 		}
-	} else {
-		newmsg := tgbotapi.NewMessage(chatID, msg)
-		newmsg.ParseMode = "HTML"
-		return wd.createButtonsAndSend(&newmsg, buttons)
 	}
+
+	params := &tgbotapi.SendMessageParams{
+		ChatID:                     chatID,
+		EphemeralMessageParameters: ephemeral,
+		Text:                       msg,
+		ParseMode:                  models.ParseModeHTML,
+	}
+	if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+		params.ReplyMarkup = kb
+	}
+
+	return wd.bot.SendMessage(ctx, params)
 }
 
 func (wd *Telega) getAllChats() []string {
@@ -223,80 +269,169 @@ func (wd *Telega) getAllChats() []string {
 	return result
 }
 
-func (wd *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (*tgbotapi.Message, error) {
-	if imgURL != "" {
-		if path, err := downloadFile(imgURL); err == nil {
-			defer os.RemoveAll(path)
-
-			newmsg := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(path))
-			newmsg.ReplyToMessageID = parrentMessageID
-			newmsg.Caption = msg
-			newmsg.ParseMode = "HTML"
-			return wd.createButtonsAndSend(&newmsg, buttons)
-		} else {
-			return &tgbotapi.Message{}, err
-		}
-	} else {
-		newmsg := tgbotapi.NewMessage(chatID, msg)
-		newmsg.ReplyToMessageID = parrentMessageID
-		newmsg.ParseMode = "HTML"
-		return wd.createButtonsAndSend(&newmsg, buttons)
+// sendPhoto отправляет сообщение картинкой (imgURL) с подписью caption
+func (wd *Telega) sendPhoto(ctx context.Context, caption, imgURL string, chatID, userID int64, parentMessageID int, buttons Buttons) (*models.Message, error) {
+	p, err := downloadFile(wd.httpClient(), imgURL)
+	if err != nil {
+		return nil, err
 	}
+	defer os.RemoveAll(p)
+
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, errors.Wrap(err, "open file error")
+	}
+	defer f.Close()
+
+	params := &tgbotapi.SendPhotoParams{
+		ChatID:    chatID,
+		Photo:     &models.InputFileUpload{Filename: filepath.Base(p), Data: f},
+		Caption:   caption,
+		ParseMode: models.ParseModeHTML,
+	}
+	if parentMessageID != 0 {
+		params.ReplyParameters = &models.ReplyParameters{MessageID: parentMessageID}
+	}
+	if userID != 0 {
+		params.EphemeralMessageParameters = &models.EphemeralMessageParameters{
+			ReceiverUserID: userID,
+		}
+	}
+	if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+		params.ReplyMarkup = kb
+	}
+
+	return wd.bot.SendPhoto(ctx, params)
 }
 
-func (wd *Telega) SendFile(chatID int64, filepath string) error {
-	msg := tgbotapi.NewDocument(chatID, tgbotapi.FilePath(filepath))
-	_, err := wd.bot.Send(msg)
+func (wd *Telega) ReplyMsg(msg string, imgURL string, chatID int64, buttons Buttons, parrentMessageID int) (*models.Message, error) {
+	if imgURL != "" {
+		return wd.sendPhoto(wd.ctx, msg, imgURL, chatID, 0, parrentMessageID, buttons)
+	}
+
+	params := &tgbotapi.SendMessageParams{
+		ChatID:          chatID,
+		Text:            msg,
+		ParseMode:       models.ParseModeHTML,
+		ReplyParameters: &models.ReplyParameters{MessageID: parrentMessageID},
+	}
+	if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+		params.ReplyMarkup = kb
+	}
+
+	return wd.bot.SendMessage(wd.ctx, params)
+}
+
+func (wd *Telega) SendFile(ctx context.Context, chatID int64, fpath string) error {
+	f, err := os.Open(fpath)
+	if err != nil {
+		return errors.Wrap(err, "open file error")
+	}
+	defer f.Close()
+
+	_, err = wd.bot.SendDocument(ctx, &tgbotapi.SendDocumentParams{
+		ChatID: chatID,
+		Document: &models.InputFileUpload{
+			Filename: filepath.Base(fpath),
+			Data:     f,
+		},
+		ParseMode: models.ParseModeHTML,
+	})
+
 	return err
 }
 
-func (wd *Telega) createButtonsAndSend(msg tgbotapi.Chattable, buttons Buttons) (*tgbotapi.Message, error) {
-	// if _, ok := msg.(tgbotapi.Fileable); ok {
-	//	fmt.Println(1)
-	// }
-
-	if len(buttons) > 0 {
-		buttons.createButtons(msg, wd.callback, func() {}, 2)
+func (wd *Telega) createInlineKeyboard(buttons Buttons) *models.InlineKeyboardMarkup {
+	if len(buttons) == 0 {
+		return nil
 	}
 
-	//timerExist := false
-	//for _, b := range buttons {
-	//	if timerExist = b.timer > 0; timerExist {
-	//		break
-	//	}
-	//}
+	btns := make([]models.InlineKeyboardButton, 0, len(buttons))
+	for i, _ := range buttons {
+		currentButton := buttons[i]
 
-	m, err := wd.bot.Send(msg)
+		handler := currentButton.handler
+		if currentButton.ID == "" {
+			UUID, _ := uuid.NewV4()
+			currentButton.ID = UUID.String()
+		}
 
-	// Отключен таймер на кнопке т.к. при большом количествет присоединившихся пользователях не будет работать
-	// if timerExist {
-	// 	go t.setTimer(m, buttons, cxt, cancel) // таймер кнопки
-	// }
+		wd.callback[currentButton.ID] = func(update models.Update) bool {
+			if handler != nil {
+				return handler(&update, currentButton)
+			}
+			return false
+		}
 
-	return &m, err
+		caption := currentButton.caption
+		if !currentButton.start.IsZero() {
+			second := int(currentButton.start.Sub(time.Now()).Seconds())
+			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", currentButton.caption, second/3600, (second%3600)/60, second%60)
+		}
+
+		btns = append(btns, models.InlineKeyboardButton{
+			Text:         caption,
+			CallbackData: currentButton.ID,
+		})
+	}
+
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: breakButtonsByColum(btns, 3),
+		ForceReply:     false,
+	}
 }
 
-func (wd *Telega) EditMsg(msg *tgbotapi.Message, txt string, buttons Buttons) *tgbotapi.Message {
-	editmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, txt)
-	editmsg.ParseMode = "HTML"
-	m, _ := wd.createButtonsAndSend(&editmsg, buttons)
+func (wd *Telega) EditMsg(msg *models.Message, txt string, buttons Buttons) *models.Message {
+	params := &tgbotapi.EditMessageTextParams{
+		ChatID:    msg.Chat.ID,
+		MessageID: msg.ID,
+		Text:      txt,
+		ParseMode: models.ParseModeHTML,
+	}
+
+	if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+		params.ReplyMarkup = kb
+	}
+	m, _ := wd.bot.EditMessageText(wd.ctx, params)
 
 	return m
 }
 
-func (wd *Telega) MeIsAdmin(chatConfig tgbotapi.ChatConfig) bool {
-	me, _ := wd.bot.GetMe()
-	return wd.UserIsAdmin(chatConfig, me.ID)
+func (wd *Telega) MeIsAdmin(chatID int64) bool {
+	me, err := wd.bot.GetMe(wd.ctx)
+	if err != nil {
+		return false
+	}
+	return wd.UserIsAdmin(chatID, me.ID)
 }
 
-func (wd *Telega) getChatAdministrators(chatConfig tgbotapi.ChatConfig) []tgbotapi.ChatMember {
-	admins, _ := wd.bot.GetChatAdministrators(tgbotapi.ChatAdministratorsConfig{ChatConfig: chatConfig})
+func (wd *Telega) getChatAdministrators(chatID int64) []models.ChatMember {
+	admins, _ := wd.bot.GetChatAdministrators(wd.ctx, &tgbotapi.GetChatAdministratorsParams{ChatID: chatID})
 	return admins
 }
 
-func (wd *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool {
-	for _, a := range wd.getChatAdministrators(chatConfig) {
-		if a.User.ID == userID {
+// chatMemberUser возвращает пользователя из объединения models.ChatMember
+func chatMemberUser(m models.ChatMember) *models.User {
+	switch m.Type {
+	case models.ChatMemberTypeOwner:
+		return m.Owner.User
+	case models.ChatMemberTypeAdministrator:
+		return &m.Administrator.User
+	case models.ChatMemberTypeMember:
+		return m.Member.User
+	case models.ChatMemberTypeRestricted:
+		return m.Restricted.User
+	case models.ChatMemberTypeLeft:
+		return m.Left.User
+	case models.ChatMemberTypeBanned:
+		return m.Banned.User
+	}
+	return nil
+}
+
+func (wd *Telega) UserIsAdmin(chatID int64, userID int64) bool {
+	for _, a := range wd.getChatAdministrators(chatID) {
+		if u := chatMemberUser(a); u != nil && u.ID == userID {
 			return true
 		}
 	}
@@ -305,18 +440,13 @@ func (wd *Telega) UserIsAdmin(chatConfig tgbotapi.ChatConfig, userID int64) bool
 }
 
 func (wd *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.Time) error {
-	params := map[string]string{
-		"chat_id":              strconv.FormatInt(chatID, 10),
-		"user_id":              strconv.FormatInt(user.ID, 10),
-		"can_change_info":      "false",
-		"can_delete_messages":  "true",
-		"can_invite_users":     "true",
-		"can_restrict_members": "true",
-		"can_pin_messages":     "false",
-		"can_promote_members":  "false",
-	}
-
-	_, err := wd.bot.MakeRequest(promoteChatMember, params)
+	_, err := wd.bot.PromoteChatMember(wd.ctx, &tgbotapi.PromoteChatMemberParams{
+		ChatID:             chatID,
+		UserID:             user.ID,
+		CanDeleteMessages:  true,
+		CanInviteUsers:     true,
+		CanRestrictMembers: true,
+	})
 	if err == nil {
 		wd.storeNewModerator(chatID, user, deadline)
 	}
@@ -325,20 +455,12 @@ func (wd *Telega) AppointModerator(chatID int64, user *UserInfo, deadline time.T
 }
 
 func (wd *Telega) RemoveModerator(chatID, userID int64) error {
-	params := map[string]string{
-		"chat_id":              strconv.FormatInt(chatID, 10),
-		"user_id":              strconv.FormatInt(userID, 10),
-		"can_change_info":      "false",
-		"can_delete_messages":  "false",
-		"can_invite_users":     "false",
-		"can_restrict_members": "false",
-		"can_pin_messages":     "false",
-		"can_promote_members":  "false",
-	}
-
-	_, err := wd.bot.MakeRequest(promoteChatMember, params)
+	_, err := wd.bot.PromoteChatMember(wd.ctx, &tgbotapi.PromoteChatMemberParams{
+		ChatID: chatID,
+		UserID: userID,
+	})
 	if err == nil {
-		wd.r.Delete(keyActiveRandomModerator + params["chat_id"])
+		wd.r.Delete(keyActiveRandomModerator + strconv.FormatInt(chatID, 10))
 	}
 
 	return err
@@ -386,17 +508,19 @@ func (wd *Telega) GetActiveRandModerator(chatID int64) (string, time.Time) {
 	return data["User"].(map[string]interface{})["Name"].(string), deadline
 }
 
-func (wd *Telega) UserIsCreator(chatConfig tgbotapi.ChatConfig, userID int64) bool {
-	for _, a := range wd.getChatAdministrators(chatConfig) {
-		if a.IsCreator() && a.User.ID == userID {
-			return true
+func (wd *Telega) UserIsCreator(chatID int64, userID int64) bool {
+	for _, a := range wd.getChatAdministrators(chatID) {
+		if a.Type == models.ChatMemberTypeOwner {
+			if u := chatMemberUser(a); u != nil && u.ID == userID {
+				return true
+			}
 		}
 	}
 
 	return false
 }
 
-func (wd *Telega) setTimer(msg tgbotapi.Message, buttons Buttons, cxt context.Context) {
+func (wd *Telega) setTimer(msg models.Message, buttons Buttons, cxt context.Context) {
 	tick := time.NewTicker(wd.getDelay())
 	defer func() {
 		tick.Stop()
@@ -437,15 +561,15 @@ B:
 	}
 }
 
-func (wd *Telega) CallbackQuery(update tgbotapi.Update) bool {
-	if update.CallbackQuery == nil || update.CallbackQuery.Message == nil {
+func (wd *Telega) CallbackQuery(update models.Update) bool {
+	if update.CallbackQuery == nil || update.CallbackQuery.Message.Message == nil {
 		return false
 	}
 
 	if call, ok := wd.callback[update.CallbackQuery.Data]; ok {
 		if call != nil {
 			if call(update) {
-				wd.DeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
+				wd.DeleteMessage(update.CallbackQuery.Message.Message.Chat.ID, update.CallbackQuery.Message.Message.ID)
 				delete(wd.callback, update.CallbackQuery.Data)
 			}
 		}
@@ -454,8 +578,16 @@ func (wd *Telega) CallbackQuery(update tgbotapi.Update) bool {
 	return true
 }
 
+// httpClient возвращает http-клиент: с прокси, если задан PROXY_URL, иначе дефолтный
+func (wd *Telega) httpClient() *http.Client {
+	if wd.client != nil {
+		return wd.client
+	}
+	return http.DefaultClient
+}
+
 func (wd *Telega) downloadFile(filepath, url string) error {
-	resp, err := new(http.Client).Get(url)
+	resp, err := wd.httpClient().Get(url)
 	if err != nil {
 		return err
 	}
@@ -471,43 +603,62 @@ func (wd *Telega) downloadFile(filepath, url string) error {
 	return err
 }
 
-func (wd *Telega) GetUser(update *tgbotapi.Update) *tgbotapi.User {
+func (wd *Telega) GetUser(update *models.Update) *models.User {
 	if update == nil {
 		return nil
 	} else if update.Message != nil {
 		return update.Message.From
 	} else if update.CallbackQuery != nil {
-		return update.CallbackQuery.From
+		return &update.CallbackQuery.From
 	} else {
 		return nil
 	}
 }
 
-func (wd *Telega) GetMessage(update tgbotapi.Update) *tgbotapi.Message {
+func (wd *Telega) GetMessage(update models.Update) *models.Message {
 	if update.Message != nil {
 		return update.Message
-	} else if update.CallbackQuery != nil {
-		return update.CallbackQuery.Message
+	} else if update.CallbackQuery != nil && update.CallbackQuery.Message.Message != nil {
+		return update.CallbackQuery.Message.Message
 	} else {
 		return nil
 	}
 }
 
-func (wd *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
+// messageCommand возвращает команду из сообщения (без аргументов и без @botname), аналог Message.Command() из старой библиотеки
+func messageCommand(m *models.Message) string {
+	if m == nil || m.Text == "" || m.Text[0] != '/' {
+		return ""
+	}
+
+	command := strings.SplitN(m.Text[1:], " ", 2)[0]
+	if i := strings.Index(command, "@"); i >= 0 {
+		command = command[:i]
+	}
+
+	return command
+}
+
+func (wd *Telega) ReadFile(message *models.Message) (data string, err error) {
 	// message.Chat.ID
 	downloadFilebyID := func(FileID string) {
-		var file tgbotapi.File
-		if file, err = wd.bot.GetFile(tgbotapi.FileConfig{FileID}); err == nil {
-			_, fileName := path.Split(file.FilePath)
-			filePath := path.Join(os.TempDir(), fileName)
-			defer os.Remove(filePath)
+		file, e := wd.bot.GetFile(wd.ctx, &tgbotapi.GetFileParams{FileID: FileID})
+		if e != nil {
+			err = e
+			return
+		}
 
-			err = wd.downloadFile(filePath, file.Link(botToken))
-			if err == nil {
-				if dataByte, err := ioutil.ReadFile(filePath); err == nil {
-					data = string(dataByte)
-				}
-			}
+		_, fileName := path.Split(file.FilePath)
+		filePath := path.Join(os.TempDir(), fileName)
+		defer os.Remove(filePath)
+
+		if err = wd.downloadFile(filePath, fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", botToken, file.FilePath)); err != nil {
+			return
+		}
+		if dataByte, e := os.ReadFile(filePath); e == nil {
+			data = string(dataByte)
+		} else {
+			err = e
 		}
 	}
 
@@ -521,28 +672,31 @@ func (wd *Telega) ReadFile(message *tgbotapi.Message) (data string, err error) {
 }
 
 func (wd *Telega) DisableSendMessages(chatID int64, userID int64, duration time.Duration) {
-	wd.restrictChatMemberConfig(chatID, userID, duration, false)
+	wd.restrictChatMember(chatID, userID, duration, false)
 }
 
 func (wd *Telega) EnableWritingMessages(chatID int64, userID int64) {
-	wd.restrictChatMemberConfig(chatID, userID, 0, true)
+	wd.restrictChatMember(chatID, userID, 0, true)
 }
 
-func (wd *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration time.Duration, allow bool) {
+func (wd *Telega) restrictChatMember(chatID int64, userID int64, duration time.Duration, allow bool) {
 	var untilDate int64
 	if duration > 0 {
 		untilDate = time.Now().Add(duration).Unix()
 	}
 
-	conf := tgbotapi.RestrictChatMemberConfig{
-		ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			ChatID: chatID,
-			UserID: userID,
-		},
-		UntilDate: untilDate,
-		Permissions: &tgbotapi.ChatPermissions{
+	_, err := wd.bot.RestrictChatMember(wd.ctx, &tgbotapi.RestrictChatMemberParams{
+		ChatID:    chatID,
+		UserID:    userID,
+		UntilDate: int(untilDate),
+		Permissions: &models.ChatPermissions{
 			CanSendMessages:       allow,
-			CanSendMediaMessages:  allow,
+			CanSendAudios:         allow,
+			CanSendDocuments:      allow,
+			CanSendPhotos:         allow,
+			CanSendVideos:         allow,
+			CanSendVideoNotes:     allow,
+			CanSendVoiceNotes:     allow,
 			CanSendPolls:          allow,
 			CanSendOtherMessages:  allow,
 			CanAddWebPagePreviews: allow,
@@ -550,19 +704,13 @@ func (wd *Telega) restrictChatMemberConfig(chatID int64, userID int64, duration 
 			CanInviteUsers:        allow,
 			CanPinMessages:        allow,
 		},
-	}
-
-	//mem, err := t.bot.GetChatMember(tgbotapi.GetChatMemberConfig{
-	//	ChatConfigWithUser: tgbotapi.ChatConfigWithUser{UserID: userID, ChatID: chatID},
-	//})
-
-	_, err := wd.bot.Request(conf)
+	})
 	if err != nil {
 		wd.logger.Error(fmt.Sprintf("При изменении прав пользователя произошла ошибка: %v\n", err))
 	}
 }
 
-func (wd *Telega) KickChatMember(chatID int64, user tgbotapi.User) {
+func (wd *Telega) KickChatMember(chatID int64, user models.User) {
 	go func() {
 		userName := wd.UserString(&user)
 		users, err := wd.r.Items(keyUsingOneTry)
@@ -611,7 +759,7 @@ func (wd *Telega) deleteAllLastMsg() {
 }
 
 // CheckMessageModeration проверяет сообщение на токсичность и оффтоп
-func (wd *Telega) CheckMessageModeration(msg *tgbotapi.Message, conf *Conf) {
+func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
 	if msg == nil || conf == nil || len(conf.AI) == 0 {
 		return
 	}
@@ -630,8 +778,8 @@ func (wd *Telega) CheckMessageModeration(msg *tgbotapi.Message, conf *Conf) {
 		return
 	}
 
-	if analysis.HatePercent >= 70 {
-		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:\n%s", analysis.HateReason), "", msg.Chat.ID, Buttons{}, msg.MessageID)
+	if analysis.HatePercent >= 85 {
+		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:\n%s", analysis.HateReason), "", msg.Chat.ID, Buttons{}, msg.ID)
 	} else if analysis.HatePercent >= 10 {
 		wd.logger.Info(fmt.Sprintf("msg: %s, HatePercent: %d, HateReason: %s", msg.Text, analysis.HatePercent, analysis.HateReason))
 	}
@@ -716,71 +864,25 @@ func (wd *Telega) getMessageCharacteristicsWrapper(client any, msgText, tread st
 	return nil, errors.New("failed to process AI request")
 }
 
-func (wd *Telega) deleteSpam(user *tgbotapi.User, reason string, messageID int, chatID int64) {
-	wd.logger.Info(fmt.Sprintf("chatID: %d, удален спам от пользователя %s\n", chatID, user.String()))
+func (wd *Telega) deleteSpam(user *models.User, reason string, messageID int, chatID int64) {
+	wd.logger.Info(fmt.Sprintf("chatID: %d, удален спам от пользователя %s\n", chatID, wd.UserString(user)))
 
 	wd.DeleteMessage(chatID, messageID)
 
 	usrName := wd.UserString(user)
-	msg, err := wd.SendMsg(fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), "", chatID, Buttons{})
+	msg, err := wd.SendMsg(wd.ctx, fmt.Sprintf("%s, я удалил ваше сообщение, подозрение на спам. \n\n(%s)\n", usrName, reason), chatID, 0, Buttons{})
 	if err != nil {
 		wd.logger.Info(errors.Wrap(err, "send msg error").Error())
 		return
 	}
 
 	time.Sleep(time.Second * 10)
-	wd.DeleteMessage(chatID, msg.MessageID)
+	wd.DeleteMessage(chatID, msg.ID)
 }
 
-// Buttons
-
-func (t Buttons) createButtons(msg tgbotapi.Chattable, callback map[string]func(tgbotapi.Update) bool, cancel context.CancelFunc, countColum int) {
-	keyboard := tgbotapi.InlineKeyboardMarkup{}
-	var Buttons []tgbotapi.InlineKeyboardButton
-
-	switch v := msg.(type) {
-	case *tgbotapi.EditMessageTextConfig:
-		v.ReplyMarkup = &keyboard
-	case *tgbotapi.EditMessageCaptionConfig:
-		v.ReplyMarkup = &keyboard
-	case *tgbotapi.MessageConfig:
-		v.ReplyMarkup = &keyboard
-	case *tgbotapi.PhotoConfig:
-		v.ReplyMarkup = &keyboard
-	}
-
-	for i, _ := range t {
-		currentButton := t[i]
-
-		handler := currentButton.handler
-		if currentButton.ID == "" {
-			UUID, _ := uuid.NewV4()
-			currentButton.ID = UUID.String()
-		}
-
-		callback[currentButton.ID] = func(update tgbotapi.Update) bool {
-			if handler != nil {
-				return handler(&update, currentButton)
-			}
-			return false
-		}
-
-		caption := currentButton.caption
-		if !currentButton.start.IsZero() {
-			second := int(currentButton.start.Sub(time.Now()).Seconds())
-			caption = fmt.Sprintf("%s (%02d:%02d:%02d)", currentButton.caption, second/3600, (second%3600)/60, second%60)
-		}
-
-		btn := tgbotapi.NewInlineKeyboardButtonData(caption, currentButton.ID)
-		Buttons = append(Buttons, btn)
-	}
-
-	keyboard.InlineKeyboard = t.breakButtonsByColum(Buttons, countColum)
-}
-
-func (t Buttons) breakButtonsByColum(Buttons []tgbotapi.InlineKeyboardButton, countColum int) [][]tgbotapi.InlineKeyboardButton {
+func breakButtonsByColum(Buttons []models.InlineKeyboardButton, countColum int) [][]models.InlineKeyboardButton {
 	end := 0
-	var result [][]tgbotapi.InlineKeyboardButton
+	var result [][]models.InlineKeyboardButton
 
 	for i := 1; i <= int(float64(len(Buttons)/countColum)); i++ {
 		end = i * countColum
@@ -789,12 +891,10 @@ func (t Buttons) breakButtonsByColum(Buttons []tgbotapi.InlineKeyboardButton, co
 			end = len(Buttons)
 		}
 
-		row := tgbotapi.NewInlineKeyboardRow(Buttons[start:end]...)
-		result = append(result, row)
+		result = append(result, Buttons[start:end])
 	}
 	if len(Buttons)%countColum > 0 {
-		row := tgbotapi.NewInlineKeyboardRow(Buttons[end:len(Buttons)]...)
-		result = append(result, row)
+		result = append(result, Buttons[end:])
 	}
 
 	return result
@@ -892,8 +992,8 @@ func getngrokWebhookURL() string {
 	}
 }
 
-func downloadFile(url string) (string, error) {
-	resp, err := http.Get(url)
+func downloadFile(client *http.Client, url string) (string, error) {
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -932,12 +1032,12 @@ func (wd *Telega) getDelay() (result time.Duration) {
 	return
 }
 
-func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVote int) {
+func (wd *Telega) StartVoting(sourceMsg *models.Message, chatID int64, countVote int) {
 	user := sourceMsg.ReplyToMessage.From
-	msg := fmt.Sprintf("Что сделать с %s %s (@%s)?", user.FirstName, user.LastName, user.UserName)
+	msg := fmt.Sprintf("Что сделать с %s %s (@%s)?", user.FirstName, user.LastName, user.Username)
 
 	b := Buttons{}
-	var sentMessage *tgbotapi.Message
+	var sentMessage *models.Message
 
 	captionBan, captionRO, captionF := "Бан", "RO на 24ч", "Простить"
 	ban, ro, forgive := map[int64]string{}, map[int64]string{}, map[int64]string{}
@@ -966,12 +1066,12 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 		wd.EditButtons(sentMessage, b)
 	}
 
-	hBan := func(u *tgbotapi.Update, currentButton *Button) bool {
+	hBan := func(u *models.Update, currentButton *Button) bool {
 		clear(u.CallbackQuery.From.ID)
 		ban[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ban) >= countVote {
-			wd.DeleteMessage(chatID, sourceMsg.MessageID)
-			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
+			wd.DeleteMessage(chatID, sourceMsg.ID)
+			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.ID)
 			wd.kickChatMember(chatID, user.ID)
 
 			wd.logger.Debug(fmt.Sprintf("Ban - %v", ban))
@@ -981,12 +1081,12 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 		renderCaption(b)
 		return false
 	}
-	hRO := func(u *tgbotapi.Update, currentButton *Button) bool {
+	hRO := func(u *models.Update, currentButton *Button) bool {
 		clear(u.CallbackQuery.From.ID)
 		ro[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 		if len(ro) >= countVote {
-			wd.DeleteMessage(chatID, sourceMsg.MessageID)
-			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.MessageID)
+			wd.DeleteMessage(chatID, sourceMsg.ID)
+			wd.DeleteMessage(chatID, sourceMsg.ReplyToMessage.ID)
 
 			wd.DisableSendMessages(chatID, user.ID, time.Hour*24)
 
@@ -1009,13 +1109,13 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 		},
 		{
 			caption: captionF,
-			handler: func(u *tgbotapi.Update, currentButton *Button) bool {
+			handler: func(u *models.Update, currentButton *Button) bool {
 				clear(u.CallbackQuery.From.ID)
 				forgive[u.CallbackQuery.From.ID] = fmt.Sprintf("%d-%s %s", u.CallbackQuery.From.ID, u.CallbackQuery.From.FirstName, u.CallbackQuery.From.LastName)
 				renderCaption(b)
 
 				if len(forgive) >= countVote {
-					_ = wd.DeleteMessage(chatID, sourceMsg.MessageID)
+					_ = wd.DeleteMessage(chatID, sourceMsg.ID)
 
 					wd.logger.Debug(fmt.Sprintf("forgive - %v", forgive))
 					return true
@@ -1026,34 +1126,30 @@ func (wd *Telega) StartVoting(sourceMsg *tgbotapi.Message, chatID int64, countVo
 		},
 		{
 			caption: "Я передумал",
-			handler: func(update *tgbotapi.Update, button *Button) bool {
+			handler: func(update *models.Update, button *Button) bool {
 				from := wd.GetUser(update)
 				if from.ID != author {
 					wd.AnswerCallbackQuery(update.CallbackQuery.ID, "Отменить может только автор")
 					return false
 				}
 
-				wd.DeleteMessage(chatID, sourceMsg.MessageID)
+				wd.DeleteMessage(chatID, sourceMsg.ID)
 				return true
 			},
 		},
 	}
 
-	if sentMessage, err = wd.SendMsg(msg, "", chatID, b); err == nil {
+	if sentMessage, err = wd.SendMsg(wd.ctx, msg, chatID, 0, b); err == nil {
 		author = sourceMsg.From.ID
 	}
 }
 
 func (wd *Telega) kickChatMemberUntil(chatID, userID int64, untilDate int64) error {
-	conf := tgbotapi.KickChatMemberConfig{
-		ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			ChatID: chatID,
-			UserID: userID,
-		},
-		UntilDate: untilDate,
-	}
-
-	_, err := wd.bot.Request(conf)
+	_, err := wd.bot.BanChatMember(wd.ctx, &tgbotapi.BanChatMemberParams{
+		ChatID:    chatID,
+		UserID:    userID,
+		UntilDate: int(untilDate),
+	})
 	return err
 }
 
@@ -1062,28 +1158,23 @@ func (wd *Telega) kickChatMember(chatID, userID int64) error {
 }
 
 func (wd *Telega) unbanChatMember(chatID, userID int64) error {
-	conf := tgbotapi.UnbanChatMemberConfig{
-		ChatMemberConfig: tgbotapi.ChatMemberConfig{
-			ChatID: chatID,
-			UserID: userID,
-		},
+	_, err := wd.bot.UnbanChatMember(wd.ctx, &tgbotapi.UnbanChatMemberParams{
+		ChatID:       chatID,
+		UserID:       userID,
 		OnlyIfBanned: true,
-	}
-	_, err := wd.bot.Request(conf)
+	})
 	return err
 }
 
 func (wd *Telega) DeleteMessage(chatID int64, messageID int) error {
-	conf := tgbotapi.DeleteMessageConfig{
+	_, err := wd.bot.DeleteMessage(wd.ctx, &tgbotapi.DeleteMessageParams{
 		ChatID:    chatID,
 		MessageID: messageID,
-	}
-
-	_, err := wd.bot.Request(conf)
+	})
 	return err
 }
 
-func (wd *Telega) SaveMember(chatID int64, user *tgbotapi.User) {
+func (wd *Telega) SaveMember(chatID int64, user *models.User) {
 	wd.mx.Lock()
 	defer wd.mx.Unlock()
 
@@ -1104,10 +1195,10 @@ func (wd *Telega) SaveMember(chatID int64, user *tgbotapi.User) {
 	}
 }
 
-func (wd *Telega) UserString(user *tgbotapi.User) string {
+func (wd *Telega) UserString(user *models.User) string {
 	userName := ""
-	if user.UserName != "" {
-		userName = "@" + user.UserName
+	if user.Username != "" {
+		userName = "@" + user.Username
 	} else {
 		userName = fmt.Sprintf("%s %s", user.FirstName, user.LastName)
 	}
@@ -1115,7 +1206,7 @@ func (wd *Telega) UserString(user *tgbotapi.User) string {
 	return userName
 }
 
-func (wd *Telega) CastUserToUserinfo(tUser *tgbotapi.User) *UserInfo {
+func (wd *Telega) CastUserToUserinfo(tUser *models.User) *UserInfo {
 	if tUser == nil {
 		return nil
 	}
@@ -1201,30 +1292,46 @@ func (wd *Telega) GetRandUser(chatID, excludeUserID int64) (result *UserInfo) {
 }
 
 func (wd *Telega) AnswerCallbackQuery(callbackQueryID, txt string) error {
-	conf := tgbotapi.CallbackConfig{
+	_, err := wd.bot.AnswerCallbackQuery(wd.ctx, &tgbotapi.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackQueryID,
 		Text:            txt,
 		ShowAlert:       true,
-	}
-
-	_, err := wd.bot.Request(conf)
+	})
 	return err
 }
 
-func (wd *Telega) EditButtons(msg *tgbotapi.Message, buttons Buttons) {
-	var editmsg tgbotapi.Chattable
+func (wd *Telega) EditButtons(msg *models.Message, buttons Buttons) {
+	var err error
+
 	if msg.Caption != "" {
-		teditmsg := tgbotapi.NewEditMessageCaption(msg.Chat.ID, msg.MessageID, msg.Caption)
-		teditmsg.ParseMode = "HTML"
-		editmsg = &teditmsg
+		params := &tgbotapi.EditMessageCaptionParams{
+			ChatID:    msg.Chat.ID,
+			MessageID: msg.ID,
+			Caption:   msg.Caption,
+			ParseMode: models.ParseModeHTML,
+		}
+		if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+			params.ReplyMarkup = kb
+		}
+
+		_, err = wd.bot.EditMessageCaption(wd.ctx, params)
 	} else {
-		teditmsg := tgbotapi.NewEditMessageText(msg.Chat.ID, msg.MessageID, msg.Text)
-		teditmsg.ParseMode = "HTML"
-		editmsg = &teditmsg
+		params := &tgbotapi.EditMessageTextParams{
+			ChatID:    msg.Chat.ID,
+			MessageID: msg.ID,
+			Text:      msg.Text,
+			ParseMode: models.ParseModeHTML,
+		}
+		if kb := wd.createInlineKeyboard(buttons); !lo.IsNil(kb) {
+			params.ReplyMarkup = kb
+		}
+
+		_, err = wd.bot.EditMessageText(wd.ctx, params)
 	}
 
-	buttons.createButtons(editmsg, wd.callback, func() {}, 2)
-	wd.bot.Send(editmsg)
+	if err != nil {
+		wd.logger.Error(fmt.Sprintf("edit message error: %v", err))
+	}
 }
 
 func (wd *Telega) Shutdown() {
@@ -1234,10 +1341,10 @@ func (wd *Telega) Shutdown() {
 	wd.r.SetMap(lastMsgKey, wd.lastMsg)
 	wd.mx.RUnlock()
 
-	wd.cancel()
+	wd.cancel() // останавливает полинг/обработку вебхуков (Start/StartWebhook следят за контекстом)
 
-	wd.bot.StopReceivingUpdates()
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
 	err := wd.httpServer.Shutdown(ctx)
 	if err != nil {
 		wd.logger.Error(errors.Wrap(err, "http server shutdown error").Error())
@@ -1351,7 +1458,7 @@ func (k *KilledInfo) String() string {
 	return string(d)
 }
 
-func (wd *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User, conf *Conf) bool {
+func (wd *Telega) CheckAndBlockMember(chatID int64, appendedUser *models.User, conf *Conf) bool {
 	if conf.BlockMembers.UserNameRegExp == "" || appendedUser == nil {
 		return false
 	}
@@ -1363,9 +1470,9 @@ func (wd *Telega) CheckAndBlockMember(chatID int64, appendedUser *tgbotapi.User,
 
 	exp := conf.BlockMembers.UserNameRegExp
 
-	if wd.checkRegExp(appendedUser.String(), exp) || wd.checkRegExp(name, exp) {
+	if wd.checkRegExp(wd.UserString(appendedUser), exp) || wd.checkRegExp(name, exp) {
 		wd.kickChatMember(chatID, appendedUser.ID)
-		wd.logger.Info(fmt.Sprintf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", appendedUser.String()))
+		wd.logger.Info(fmt.Sprintf("пользователь %q был заблокирован в соответствии с настройками \"blockMembers\"\n", wd.UserString(appendedUser)))
 		return true
 	}
 

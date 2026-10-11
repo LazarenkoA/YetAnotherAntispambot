@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/alecthomas/kingpin/v2"
+	"github.com/go-telegram/bot/models"
 	"github.com/joho/godotenv"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
@@ -16,8 +17,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type wrapper struct {
@@ -33,6 +32,7 @@ var (
 	cert        string
 	pollingMode string
 	ownerID     string
+	proxyURL    string
 )
 
 var (
@@ -58,7 +58,8 @@ func init() {
 	redisAddr = os.Getenv("REDIS")
 	cert = os.Getenv("CRT")
 	pollingMode = os.Getenv("POLLING_MODE")
-	ownerID = os.Getenv("OWNER_ID") // используется для некоторых функций бота
+	ownerID = os.Getenv("OWNER_ID")   // используется для некоторых функций бота
+	proxyURL = os.Getenv("PROXY_URL") // прокси для запросов к Telegram API (http/https/socks5), например socks5://user:pass@host:port
 }
 
 func Run(ctx_ context.Context) error {
@@ -89,7 +90,7 @@ func Run(ctx_ context.Context) error {
 	limiter := rate.Sometimes{Interval: time.Second * 30} // лимит на вызов апи гигачата
 
 	for {
-		var update tgbotapi.Update
+		var update models.Update
 
 		select {
 		case <-ctx.Done():
@@ -98,8 +99,11 @@ func Run(ctx_ context.Context) error {
 		}
 
 		chatMember := lo.If(update.ChatMember != nil, update.ChatMember).Else(update.MyChatMember)
-		if chatMember != nil && chatMember.NewChatMember.Status == "member" && chatMember.OldChatMember.Status != "restricted" && chatMember.OldChatMember.Status != "administrator" {
-			handlerAddNewMembers(wd, chatMember.Chat, chatMember.NewChatMember.User, &chatMember.From, readConf(wd, chatMember.Chat.ID))
+		if chatMember != nil &&
+			chatMember.NewChatMember.Type == models.ChatMemberTypeMember &&
+			chatMember.OldChatMember.Type != models.ChatMemberTypeRestricted &&
+			chatMember.OldChatMember.Type != models.ChatMemberTypeAdministrator {
+			handlerAddNewMembers(wd, chatMember.Chat, chatMemberUser(chatMember.NewChatMember), &chatMember.From, readConf(wd, chatMember.Chat.ID))
 		}
 
 		msg := wd.GetMessage(update)
@@ -112,12 +116,12 @@ func Run(ctx_ context.Context) error {
 
 		// удаляем сообщения о вступлении в группу
 		if len(msg.NewChatMembers) > 0 {
-			wd.DeleteMessage(chatID, msg.MessageID)
+			wd.DeleteMessage(chatID, msg.ID)
 			continue
 		}
 
-		me, _ := wd.bot.GetMe()
-		if p := strings.Split(msg.Text, "@"); msg.Text != "" && msg.Text[0] == '/' && len(p) == 2 && p[1] != me.UserName {
+		me, _ := wd.bot.GetMe(ctx)
+		if p := strings.Split(msg.Text, "@"); msg.Text != "" && msg.Text[0] == '/' && len(p) == 2 && p[1] != me.Username {
 			continue
 		}
 
@@ -126,7 +130,7 @@ func Run(ctx_ context.Context) error {
 			continue
 		}
 
-		command := wd.GetMessage(update).Command()
+		command := messageCommand(msg)
 		switch command {
 		case "start":
 			wd.start(chatID, msg)
@@ -169,7 +173,7 @@ func Run(ctx_ context.Context) error {
 				key := strconv.FormatInt(chatID, 10)
 				if call, ok := wd.hooks[key]; ok {
 					if call(update) {
-						wd.DeleteMessage(chatID, msg.MessageID)
+						wd.DeleteMessage(chatID, msg.ID)
 
 						delete(wd.hooks, key)
 					}
@@ -179,12 +183,12 @@ func Run(ctx_ context.Context) error {
 		}
 
 		if msg.LeftChatMember != nil && msg.LeftChatMember.ID == me.ID {
-			wd.r.DeleteItems(strconv.FormatInt(wd.GetMessage(update).From.ID, 10), strconv.FormatInt(chatID, 10))
+			_ = wd.r.DeleteItems(strconv.FormatInt(wd.GetMessage(update).From.ID, 10), strconv.FormatInt(chatID, 10))
 			continue
 		}
 
 		// вызов кворума на бан
-		if strings.Contains(msg.Text, "@"+strings.TrimSpace(me.UserName)) && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+		if strings.Contains(msg.Text, "@"+strings.TrimSpace(me.Username)) && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
 			conf := readConf(wd, chatID)
 			wd.StartVoting(msg, chatID, conf.CountVoted)
 		}
@@ -193,7 +197,7 @@ func Run(ctx_ context.Context) error {
 		if txt := msg.Text; txt != "" {
 			if s, r := wd.IsSPAM(user.ID, chatID, txt, readConf(wd, chatID)); s {
 				time.Sleep(time.Millisecond * 500) // небольшая задержка, иногда сообщение в клиенте может отрисовываться после удаления
-				wd.deleteSpam(user, r, msg.MessageID, chatID)
+				wd.deleteSpam(user, r, msg.ID, chatID)
 			} else {
 				limiter.Do(func() {
 					wd.CheckMessageModeration(msg, readConf(wd, chatID))
@@ -203,12 +207,12 @@ func Run(ctx_ context.Context) error {
 	}
 }
 
-func shot(wd *Telega, chat *tgbotapi.Chat, player *UserInfo) bool {
+func shot(wd *Telega, chat *models.Chat, player *UserInfo) bool {
 	result := lo.If(rand.Intn(6) == 1, "убит").Else("промах")
-	wd.SendTTLMsg(fmt.Sprintf("Выстрел в игрока %s - %s.", player.Name, result), "", chat.ID, Buttons{}, time.Second*10)
+	wd.SendTTLMsg(fmt.Sprintf("Выстрел в игрока %s - %s.", player.Name, result), chat.ID, Buttons{}, time.Second*10)
 	if result == "убит" {
-		if wd.UserIsAdmin(chat.ChatConfig(), player.ID) {
-			wd.SendTTLMsg(fmt.Sprintf("Игрок %s является администратором, у него иммунитет.", player.Name), "", chat.ID, Buttons{}, time.Second*10)
+		if wd.UserIsAdmin(chat.ID, player.ID) {
+			wd.SendTTLMsg(fmt.Sprintf("Игрок %s является администратором, у него иммунитет.", player.Name), chat.ID, Buttons{}, time.Second*10)
 			return true
 		}
 
@@ -220,47 +224,18 @@ func shot(wd *Telega, chat *tgbotapi.Chat, player *UserInfo) bool {
 	return false
 }
 
-//func processingNewMembers(wd *Telega, update tgbotapi.Update) bool {
-//	var newChatMember []*tgbotapi.User
-//	var chat tgbotapi.Chat
-//	var messageID int
-//	var from *tgbotapi.User
-//
-//	if update.ChatMember != nil && update.ChatMember.NewChatMember.Status == "member" {
-//		newChatMember = append(newChatMember, update.ChatMember.NewChatMember.User)
-//		chat, from = update.ChatMember.Chat, &update.ChatMember.From
-//	}
-//
-//	if msg := wd.GetMessage(update); msg != nil {
-//		users := lo.Map(msg.NewChatMembers, func(item tgbotapi.User, _ int) *tgbotapi.User {
-//			return &item
-//		})
-//
-//		newChatMember = lo.UniqBy(append(newChatMember, users...), func(item *tgbotapi.User) int64 { return item.ID })
-//		chat, messageID, from = *msg.Chat, msg.MessageID, msg.From
-//	}
-//
-//	for _, user := range newChatMember {
-//		if handlerAddNewMembers(wd, chat, user, from, readConf(wd, chat.ID)) {
-//			wd.DeleteMessage(chat.ID, messageID)
-//		}
-//	}
-//
-//	return len(newChatMember) > 0
-//}
-
-func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
+func configuration(wd *Telega, update models.Update, chatID int64) {
 	buttons := Buttons{}
 	chats, _ := wd.r.Items(strconv.FormatInt(wd.GetMessage(update).From.ID, 10))
 	key := strconv.FormatInt(chatID, 10)
 
-	var msg *tgbotapi.Message
-	handler := func(_ *tgbotapi.Update, b *Button) bool {
+	var msg *models.Message
+	handler := func(_ *models.Update, b *Button) bool {
 		chat := b.ID
 		buttons := Buttons{
 			&Button{
 				caption: "Скачать",
-				handler: func(*tgbotapi.Update, *Button) bool {
+				handler: func(*models.Update, *Button) bool {
 					if !getSettings(wd, chat, chatID) {
 						wd.EditMsg(msg, "Для данного чата не найдено настроек", buttons)
 					}
@@ -273,20 +248,20 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 			"<pre>Пример настроек можно посмотреть в репазитории https://github.com/LazarenkoA/YetAnotherAntispambot</pre>\n"+
 			"Что бы скачать текущие настройки нажмите \"Скачать\"", buttons)
 
-		wd.hooks[key] = func(upd tgbotapi.Update) bool {
+		wd.hooks[key] = func(upd models.Update) bool {
 			if upd.Message == nil {
 				return false
 			}
 			if confdata, err := wd.ReadFile(upd.Message); err == nil {
 				settings, err := wrap(wd.r.StringMap(settingsKey)).result()
 				if err != nil {
-					wd.SendMsg(fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", err), "", chatID, Buttons{})
+					wd.SendMsg(wd.ctx, fmt.Sprintf("Произошла ошибка при получении значения из redis:\n%v", err), chatID, 0, Buttons{})
 				}
 
 				settings[chat] = confdata
 				wd.r.SetMap(settingsKey, settings)
 
-				wd.SendTTLMsg("👍", "", chatID, Buttons{}, time.Second*10)
+				wd.SendTTLMsg("👍", chatID, Buttons{}, time.Second*10)
 				return true
 			} else {
 				return false
@@ -308,7 +283,7 @@ func configuration(wd *Telega, update tgbotapi.Update, chatID int64) {
 		})
 	}
 
-	msg, _ = wd.SendMsg("выберите чат", "", chatID, buttons)
+	msg, _ = wd.SendMsg(wd.ctx, "выберите чат", chatID, 0, buttons)
 }
 
 func getSettings(wd *Telega, key string, chatID int64) bool {
@@ -327,7 +302,7 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 			f.WriteString(s)
 			f.Close()
 
-			if err := wd.SendFile(chatID, f.Name()); err != nil {
+			if err := wd.SendFile(wd.ctx, chatID, f.Name()); err != nil {
 				return false
 			}
 		}
@@ -339,14 +314,17 @@ func getSettings(wd *Telega, key string, chatID int64) bool {
 	return true
 }
 
-func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi.User, from *tgbotapi.User, conf *Conf) {
+func handlerAddNewMembers(wd *Telega, chat models.Chat, appendedUser *models.User, from *models.User, conf *Conf) {
 	var questionMessageID int
 
 	// когда добавили бота в чат, проверяем является ли он админом, если нет, сообщаем что нужно добавить в группу
-	me, _ := wd.bot.GetMe()
+	me, _ := wd.bot.GetMe(wd.ctx)
 	if appendedUser.ID == me.ID {
-		if !wd.MeIsAdmin(chat.ChatConfig()) {
-			message, _ := wd.SendMsg("Для корректной работы сделайте меня администратором", "", chat.ID, Buttons{})
+		if !wd.MeIsAdmin(chat.ID) {
+			message, err := wd.SendMsg(wd.ctx, "Для корректной работы сделайте меня администратором", chat.ID, 0, Buttons{})
+			if err != nil {
+				wd.logger.Error(errors.Wrap(err, "send msg error").Error())
+			}
 
 			// отслеживаем статус, когда сделают администратором удаляем сообщение
 			go func() {
@@ -354,8 +332,8 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 				defer tick.Stop()
 
 				for range tick.C {
-					if wd.MeIsAdmin(chat.ChatConfig()) {
-						wd.DeleteMessage(chat.ID, message.MessageID)
+					if wd.MeIsAdmin(chat.ID) {
+						wd.DeleteMessage(chat.ID, message.ID)
 						break
 					}
 				}
@@ -373,7 +351,7 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 	}
 
 	if conf == nil {
-		wd.logger.Error(fmt.Sprintf("для чата %s %s (%s) не определены настройки", chat.FirstName, chat.LastName, chat.UserName))
+		wd.logger.Error(fmt.Sprintf("для чата %s %s (%s) не определены настройки", chat.FirstName, chat.LastName, chat.Username))
 		return
 	}
 
@@ -381,22 +359,22 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 		return // значит уже заблокировали
 	}
 
-	wd.logger.With("chatID", chat.ID).Info(fmt.Sprintf("join new user: %s (%d) to chat: %s", appendedUser.String(), appendedUser.ID, chat.UserName))
+	wd.logger.With("chatID", chat.ID).Info(fmt.Sprintf("join new user: %s (%d) to chat: %s", wd.UserString(appendedUser), appendedUser.ID, chat.Username))
 
 	wd.DisableSendMessages(chat.ID, appendedUser.ID, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var handlers []func(*tgbotapi.Update, *Button) bool
+	var handlers []func(*models.Update, *Button) bool
 	deleteQuestionMessage := func(messageID int) {
 		cancel()
 		if err := wd.DeleteMessage(chat.ID, messageID); err == nil {
 			wd.r.DeleteItems(keyActiveMSG, strconv.Itoa(messageID))
 		}
 	}
-	handlerCancel := func(update *tgbotapi.Update, _ *Button) (result bool) {
+	handlerCancel := func(update *models.Update, _ *Button) (result bool) {
 		from := wd.GetUser(update)
-		if result = update == nil || from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from.ID); result {
+		if result = update == nil || from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ID, from.ID); result {
 			deleteQuestionMessage(questionMessageID)
 			wd.KickChatMember(chat.ID, *appendedUser)
 		}
@@ -406,9 +384,9 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 	b := Buttons{}
 	for _, ans := range conf.Answers {
 		a := ans // для замыкания
-		handlers = append(handlers, func(update *tgbotapi.Update, currentButton *Button) (result bool) {
+		handlers = append(handlers, func(update *models.Update, currentButton *Button) (result bool) {
 			from := wd.GetUser(update)
-			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ChatConfig(), from.ID); result {
+			if result = from.ID == appendedUser.ID || wd.UserIsAdmin(chat.ID, from.ID); result {
 				if a.Correct {
 					wd.EnableWritingMessages(chat.ID, appendedUser.ID)
 					deleteQuestionMessage(questionMessageID)
@@ -448,19 +426,25 @@ func handlerAddNewMembers(wd *Telega, chat tgbotapi.Chat, appendedUser *tgbotapi
 	})
 
 	member := appendedUser.FirstName + " " + appendedUser.LastName
-	if appendedUser.UserName != "" {
-		member = "@" + appendedUser.UserName
+	if appendedUser.Username != "" {
+		member = "@" + appendedUser.Username
 	}
 
 	txt := fmt.Sprintf("Привет %s\nДля проверки на антиспам просьба ответить на вопрос (на ответ дается %d секунд):"+
 		"\n\n%s", member, timeout, conf.Question.Txt)
 
-	if message, err := wd.SendMsg(txt, conf.Question.Img, chat.ID, b); err != nil {
+	var message *models.Message
+	var err error
+	if conf.Question.Img != "" {
+		message, err = wd.sendPhoto(wd.ctx, txt, conf.Question.Img, chat.ID, appendedUser.ID, 0, b)
+	} else {
+		message, err = wd.SendMsg(wd.ctx, txt, chat.ID, appendedUser.ID, b)
+	}
+	if err != nil {
 		wd.logger.Error(errors.Wrap(err, "SendMsg error").Error())
 		return
-	} else {
-		questionMessageID = message.MessageID
 	}
+	questionMessageID = message.ID
 
 	wd.r.AppendItems(keyActiveMSG, strconv.Itoa(questionMessageID))
 
