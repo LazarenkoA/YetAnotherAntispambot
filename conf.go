@@ -15,9 +15,12 @@ type question struct {
 	Img string `yaml:"img"`
 }
 
+type Deepseek struct {
+	APIKeys []string `yaml:"apiKeys"`
+}
+
 type AIConf struct {
-	Name   string `yaml:"name"`
-	APIKey string `yaml:"apiKey"`
+	deepseek *Deepseek `yaml:"deepseek"`
 }
 
 type Conf struct {
@@ -31,7 +34,7 @@ type Conf struct {
 	BlockMembers struct {
 		UserNameRegExp string `yaml:"userNameRegExp"`
 	} `yaml:"blockMembers"`
-	AI []AIConf `yaml:"ai"`
+	AI AIConf `yaml:"ai"`
 }
 
 func LoadConfFromFile(confpath string) (result *Conf, err error) {

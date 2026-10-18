@@ -363,13 +363,15 @@ func handlerAddNewMembers(wd *Telega, chat models.Chat, appendedUser *models.Use
 
 	wd.DisableSendMessages(chat.ID, appendedUser.ID, 0) // ограничиваем пользователя писать сообщения пока он не ответит верно на вопрос
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancelTimeout := context.WithCancel(context.Background())
 
 	var handlers []func(*models.Update, *Button) bool
 	deleteQuestionMessage := func(messageID int) {
-		cancel()
-		if err := wd.DeleteMessage(chat.ID, messageID); err == nil {
+		cancelTimeout()
+		if err := wd.DeleteEphemeralMessage(chat.ID, appendedUser.ID, messageID); err == nil {
 			wd.r.DeleteItems(keyActiveMSG, strconv.Itoa(messageID))
+		} else {
+			wd.logger.Error(errors.Wrap(err, "delete message error").Error())
 		}
 	}
 	handlerCancel := func(update *models.Update, _ *Button) (result bool) {
@@ -444,7 +446,7 @@ func handlerAddNewMembers(wd *Telega, chat models.Chat, appendedUser *models.Use
 		wd.logger.Error(errors.Wrap(err, "SendMsg error").Error())
 		return
 	}
-	questionMessageID = message.ID
+	questionMessageID = message.EphemeralMessageID
 
 	wd.r.AppendItems(keyActiveMSG, strconv.Itoa(questionMessageID))
 

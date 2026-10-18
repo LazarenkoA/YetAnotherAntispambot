@@ -3,7 +3,6 @@ package app
 import (
 	"Antispam/AI"
 	"Antispam/AI/deepseek"
-	"Antispam/AI/giga"
 	"Antispam/db"
 	"bytes"
 	"context"
@@ -760,16 +759,11 @@ func (wd *Telega) deleteAllLastMsg() {
 
 // CheckMessageModeration проверяет сообщение на токсичность и оффтоп
 func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
-	if msg == nil || conf == nil || len(conf.AI) == 0 {
+	if msg == nil || conf == nil || conf.AI.deepseek == nil {
 		return
 	}
 
 	wd.logger.Debug("message AI moderation analysis")
-
-	//if userWeight := wd.userWeight(msg.Chat.ID, msg.From.ID); userWeight > 5 {
-	//	wd.logger.Debug(fmt.Sprintf("user: %s in chat: %s skipped, userWeight: %d", msg.From.String(), msg.Chat.Title, userWeight))
-	//	return
-	//}
 
 	getMessageCharacteristics := wd.aiClient(msg.Chat.ID, conf.AI)
 	analysis, err := getMessageCharacteristics(msg.Text, wd.getThreadMessages(msg))
@@ -790,7 +784,7 @@ func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
 }
 
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
-	if conf == nil || len(conf.AI) == 0 {
+	if conf == nil || conf.AI.deepseek == nil {
 		return false, ""
 	}
 
@@ -822,7 +816,7 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	return analysis.IsSpam, analysis.SpamReason
 }
 
-func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText, tread string) (*AI.MessageAnalysis, error) {
+func (wd *Telega) aiClient(chatID int64, aiConf AIConf) func(msgText, tread string) (*AI.MessageAnalysis, error) {
 	if clients, ok := wd.pool.Load(chatID); ok {
 		return func(msgText, tread string) (*AI.MessageAnalysis, error) {
 			return wd.getMessageCharacteristicsWrapper(clients, msgText, tread)
@@ -830,16 +824,9 @@ func (wd *Telega) aiClient(chatID int64, aiConf []AIConf) func(msgText, tread st
 	}
 
 	var clients []IMessageAnalysis
-	for _, c := range aiConf {
-		switch c.Name {
-		case "deepseek":
-			if ds, err := deepseek.NewDSClient(wd.ctx, c.APIKey); err == nil {
-				clients = append(clients, ds)
-			}
-		case "gigachat":
-			if g, err := giga.NewGigaClient(wd.ctx, c.APIKey); err == nil {
-				clients = append(clients, g)
-			}
+	for _, APIKey := range aiConf.deepseek.APIKeys {
+		if ds, err := deepseek.NewDSClient(wd.ctx, APIKey); err == nil {
+			clients = append(clients, ds)
 		}
 	}
 
@@ -1170,6 +1157,15 @@ func (wd *Telega) DeleteMessage(chatID int64, messageID int) error {
 	_, err := wd.bot.DeleteMessage(wd.ctx, &tgbotapi.DeleteMessageParams{
 		ChatID:    chatID,
 		MessageID: messageID,
+	})
+	return err
+}
+
+func (wd *Telega) DeleteEphemeralMessage(chatID, userID int64, messageID int) error {
+	_, err := wd.bot.DeleteEphemeralMessage(wd.ctx, &tgbotapi.DeleteEphemeralMessageParams{
+		ChatID:             chatID,
+		ReceiverUserID:     userID,
+		EphemeralMessageID: messageID,
 	})
 	return err
 }
