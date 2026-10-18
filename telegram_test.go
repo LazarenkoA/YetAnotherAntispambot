@@ -185,14 +185,20 @@ func Test_aiClient(t *testing.T) {
 	c := gomock.NewController(t)
 	defer c.Finish()
 
-	t.Run("", func(t *testing.T) {
-		telega := &Telega{}
-		f := telega.aiClient(123, []AIConf{{}, {}})
+	t.Run("клиентов нет - ошибка анализа", func(t *testing.T) {
+		telega := &Telega{logger: slog.Default(), ctx: context.Background()}
+		telega.pool.Delete(123)
+
+		f := telega.aiClient(123, AIConf{})
 		result, err := f("", "")
 		assert.Nil(t, result)
 		assert.Error(t, err)
+
+		// пустой список клиентов не должен попадать в pool
+		_, ok := telega.pool.Load(int64(123))
+		assert.False(t, ok)
 	})
-	t.Run("", func(t *testing.T) {
+	t.Run("есть ИИ - клиенты создаются и кэшируются", func(t *testing.T) {
 		p := gomonkey.ApplyFunc(giga.NewGigaClient, func(ctx context.Context, authKey string) (*giga.Client, error) {
 			return new(giga.Client), nil
 		})
@@ -201,19 +207,29 @@ func Test_aiClient(t *testing.T) {
 		})
 		defer p.Reset()
 
-		giga := mock_app.NewMockIMessageAnalysis(c)
-		ds := mock_app.NewMockIMessageAnalysis(c)
+		telega := &Telega{logger: slog.Default(), ctx: context.Background()}
+		telega.pool.Delete(123)
 
-		giga.EXPECT().GetMessageCharacteristics("test", "").Return(nil, errors.New("error"))
-		ds.EXPECT().GetMessageCharacteristics("test", "").Return(&AI.MessageAnalysis{
+		_ = telega.aiClient(123, AIConf{Deepseek: &Deepseek{APIKeys: []string{"key1", "key2"}}})
+
+		clients, ok := telega.pool.Load(int64(123))
+		if assert.True(t, ok) {
+			assert.Len(t, clients.([]IMessageAnalysis), 2)
+		}
+	})
+	t.Run("клиенты из pool используются повторно", func(t *testing.T) {
+		gigaMock := mock_app.NewMockIMessageAnalysis(c)
+		dsMock := mock_app.NewMockIMessageAnalysis(c)
+
+		gigaMock.EXPECT().GetMessageCharacteristics("test", "").Return(nil, errors.New("error"))
+		dsMock.EXPECT().GetMessageCharacteristics("test", "").Return(&AI.MessageAnalysis{
 			IsSpam: true,
 		}, nil)
 
-		telega := &Telega{logger: slog.Default()}
-		telega.aiClient(123, []AIConf{{Name: "deepseek"}, {Name: "gigachat"}})
-		telega.pool.Store(int64(123), []IMessageAnalysis{giga, ds})
+		telega := &Telega{logger: slog.Default(), ctx: context.Background()}
+		telega.pool.Store(int64(123), []IMessageAnalysis{gigaMock, dsMock})
 
-		f := telega.aiClient(123, []AIConf{{Name: "deepseek"}, {Name: "gigachat"}})
+		f := telega.aiClient(123, AIConf{})
 		result, err := f("test", "")
 		assert.NoError(t, err)
 		if assert.NotNil(t, result) {

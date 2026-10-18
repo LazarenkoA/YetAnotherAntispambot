@@ -54,6 +54,12 @@ const (
 	keyActiveMSG             = "keyActiveMSG"
 	keyActiveRandomModerator = "keyActiveRandomModerator"
 	keyUsingOneTry           = "UsingOneTry"
+
+	// hateToxicThreshold - порог hate_percent, после которого сообщение считается токсичным
+	// (бот отвечает пользователю и сообщение попадает в статистику токсичности)
+	hateToxicThreshold = 85
+	// hateWarnThreshold - порог, после которого токсичность пишется в лог
+	hateWarnThreshold = 10
 )
 
 type Buttons []*Button
@@ -89,6 +95,8 @@ type Telega struct {
 	httpServer        *http.Server
 	client            *http.Client // http-клиент с прокси (если задан PROXY_URL), используется для всех запросов к Telegram
 	users             map[int64]map[int64]UserInfo
+	toxicity          map[int64]map[int64]*ToxicityStat                                                                            // статистика токсичности по чатам и пользователям
+	replyFn           func(msg string, imgURL string, chatID int64, buttons Buttons, parentMessageID int) (*models.Message, error) // для тестов, по умолчанию ReplyMsg
 	ctx               context.Context
 	cancel            context.CancelFunc
 	randomModeratorMX sync.Mutex
@@ -115,6 +123,7 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (<-chan
 	wd.callback = map[string]func(models.Update) bool{}
 	wd.hooks = map[string]func(models.Update) bool{}
 	wd.users = map[int64]map[int64]UserInfo{}
+	wd.replyFn = wd.ReplyMsg
 	wd.logger = slog.Default().With("name", "telegram")
 
 	var err error
@@ -131,6 +140,7 @@ func (wd *Telega) New(debug bool, certFilePath string, pollingMode bool) (<-chan
 	wd.ctx, wd.cancel = context.WithCancel(context.Background())
 
 	wd.restoreUsersInfo()
+	wd.restoreToxicityInfo()
 	go wd.watchKilledUsers(time.Minute)
 
 	updates := make(chan models.Update, 100)
@@ -759,7 +769,7 @@ func (wd *Telega) deleteAllLastMsg() {
 
 // CheckMessageModeration проверяет сообщение на токсичность и оффтоп
 func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
-	if msg == nil || conf == nil || conf.AI.deepseek == nil {
+	if msg == nil || msg.From == nil || conf == nil || !conf.AI.AIEnabled() {
 		return
 	}
 
@@ -768,13 +778,17 @@ func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
 	getMessageCharacteristics := wd.aiClient(msg.Chat.ID, conf.AI)
 	analysis, err := getMessageCharacteristics(msg.Text, wd.getThreadMessages(msg))
 	if err != nil {
+		// AI недоступен (ошибка API, нет денег на счету и т.п.) - статистику токсичности не трогаем,
+		// что бы % не искажался в сторону уменьшения
 		wd.logger.Error(errors.Wrap(err, "GetMessageCharacteristics error").Error())
 		return
 	}
 
-	if analysis.HatePercent >= 85 {
-		wd.ReplyMsg(fmt.Sprintf("Ваше сообщение похоже на токсичное, вот почему:\n%s", analysis.HateReason), "", msg.Chat.ID, Buttons{}, msg.ID)
-	} else if analysis.HatePercent >= 10 {
+	stat := wd.RecordToxicity(msg.Chat.ID, msg.From.ID, analysis.HatePercent)
+
+	if analysis.HatePercent >= hateToxicThreshold {
+		wd.replyFn(formatToxicReply(analysis, stat), "", msg.Chat.ID, Buttons{}, msg.ID)
+	} else if analysis.HatePercent >= hateWarnThreshold {
 		wd.logger.Info(fmt.Sprintf("msg: %s, HatePercent: %d, HateReason: %s", msg.Text, analysis.HatePercent, analysis.HateReason))
 	}
 
@@ -783,8 +797,16 @@ func (wd *Telega) CheckMessageModeration(msg *models.Message, conf *Conf) {
 	//}
 }
 
+// formatToxicReply формирует текст ответа на токсичное сообщение с % токсичности сообщения и пользователя
+func formatToxicReply(analysis *AI.MessageAnalysis, stat ToxicityStat) string {
+	return fmt.Sprintf("Ваше сообщение похоже на токсичное (токсичность сообщения: %d%%).\n"+
+		"Вот почему:\n%s\n\n"+
+		"📊 Токсичность ваших сообщений: %.0f%% (%d токсичных из %d проверенных)",
+		analysis.HatePercent, analysis.HateReason, stat.Percent(), stat.Toxic, stat.Total)
+}
+
 func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, string) {
-	if conf == nil || conf.AI.deepseek == nil {
+	if conf == nil || !conf.AI.AIEnabled() {
 		return false, ""
 	}
 
@@ -816,35 +838,43 @@ func (wd *Telega) IsSPAM(userID, chatID int64, msg string, conf *Conf) (bool, st
 	return analysis.IsSpam, analysis.SpamReason
 }
 
+// aiClient возвращает функцию анализа сообщения. Клиенты создаются один раз на чат и кэшируются в pool.
+// Если ни один клиент создать не удалось, пустой список в pool не сохраняется, что бы при следующем
+// вызове попытаться создать клиентов заново
 func (wd *Telega) aiClient(chatID int64, aiConf AIConf) func(msgText, tread string) (*AI.MessageAnalysis, error) {
 	if clients, ok := wd.pool.Load(chatID); ok {
 		return func(msgText, tread string) (*AI.MessageAnalysis, error) {
-			return wd.getMessageCharacteristicsWrapper(clients, msgText, tread)
+			return wd.getMessageCharacteristics(clients.([]IMessageAnalysis), msgText, tread)
 		}
 	}
 
 	var clients []IMessageAnalysis
-	for _, APIKey := range aiConf.deepseek.APIKeys {
-		if ds, err := deepseek.NewDSClient(wd.ctx, APIKey); err == nil {
-			clients = append(clients, ds)
+	if aiConf.AIEnabled() {
+		for _, APIKey := range aiConf.Deepseek.APIKeys {
+			if ds, err := deepseek.NewDSClient(wd.ctx, APIKey); err == nil {
+				clients = append(clients, ds)
+			} else {
+				wd.logger.Error(fmt.Sprintf("deepseek client create error (key #%d): %s", len(clients)+1, err))
+			}
 		}
 	}
 
-	wd.pool.Store(chatID, clients)
+	if len(clients) > 0 {
+		wd.pool.Store(chatID, clients)
+	}
 
 	return func(msgText, tread string) (*AI.MessageAnalysis, error) {
-		return wd.getMessageCharacteristicsWrapper(clients, msgText, tread)
+		return wd.getMessageCharacteristics(clients, msgText, tread)
 	}
 }
 
-func (wd *Telega) getMessageCharacteristicsWrapper(client any, msgText, tread string) (*AI.MessageAnalysis, error) {
-	if clients, ok := client.([]IMessageAnalysis); ok {
-		for _, c := range clients {
-			if r, err := c.GetMessageCharacteristics(msgText, tread); err == nil {
-				return r, nil
-			} else {
-				wd.logger.Error(fmt.Sprintf("ai request error: %s", err))
-			}
+// getMessageCharacteristics поочередно опрашивает клиентов, первый успешный ответ возвращается
+func (wd *Telega) getMessageCharacteristics(clients []IMessageAnalysis, msgText, tread string) (*AI.MessageAnalysis, error) {
+	for _, c := range clients {
+		if r, err := c.GetMessageCharacteristics(msgText, tread); err == nil {
+			return r, nil
+		} else {
+			wd.logger.Error(fmt.Sprintf("ai request error: %s", err))
 		}
 	}
 
@@ -1332,6 +1362,7 @@ func (wd *Telega) EditButtons(msg *models.Message, buttons Buttons) {
 
 func (wd *Telega) Shutdown() {
 	wd.storeUsersInfo()
+	wd.storeToxicityInfo()
 
 	wd.mx.RLock()
 	wd.r.SetMap(lastMsgKey, wd.lastMsg)

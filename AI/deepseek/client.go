@@ -55,6 +55,10 @@ func (c *Client) GetMessageCharacteristics(msgText, tread string) (*AI.MessageAn
 		return nil, errors.Wrap(err, "CallChatCompletionsChat error")
 	}
 
+	if len(chatResp.Choices) == 0 || chatResp.Choices[0].Message == nil {
+		return nil, errors.New("response does not contain data")
+	}
+
 	if c.countReq%10 == 0 {
 		logger.Info(fmt.Sprintf("deepseek API request count: %d", c.countReq+1))
 	}
@@ -71,7 +75,7 @@ func (c *Client) postProcessing(answer string) (*AI.MessageAnalysis, error) {
 
 	var analysis AI.MessageAnalysis
 	if err := json.Unmarshal([]byte(answer), &analysis); err != nil {
-		return nil, errors.Wrap(err, "json unmarshal error")
+		return nil, errors.Wrapf(err, "json unmarshal error, answer: %q", answer)
 	}
 
 	return &analysis, nil

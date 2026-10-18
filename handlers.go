@@ -21,16 +21,16 @@ var (
 
 func (wd *Telega) checkAI(chatID int64, msg *models.Message) {
 	// пример команды
-	// /checkAI::Здраствуйте!  Нужны люди на удалённый проект, от 500$ в неделю, 2-3 часа в день, 18+. Жду в личке::MTZmODdlMmU...xLTM0OWE0MmE1NDJiNg==
+	// /checkAI ::Здраствуйте!  Нужны люди на удалённый проект, от 500$ в неделю, 2-3 часа в день, 18+. Жду в личке::MTZmODdlMmU...xLTM0OWE0MmE1NDJiNg==
 
 	split := strings.Split(msg.Text, "::")
-	if len(split) < 4 {
+	if len(split) < 3 {
 		wd.SendMsg(wd.ctx, "Некорректный формат сообщения", chatID, 0, Buttons{})
 		return
 	}
 
 	wd.pool.Delete(chatID)
-	analysis, err := wd.aiClient(chatID, AIConf{deepseek: &Deepseek{APIKeys: []string{split[2]}}})(split[1], "")
+	analysis, err := wd.aiClient(chatID, AIConf{Deepseek: &Deepseek{APIKeys: []string{split[2]}}})(split[1], "")
 	if err != nil {
 		wd.SendMsg(wd.ctx, fmt.Sprintf("Произошла ошибка: %s", err.Error()), chatID, 0, Buttons{})
 	} else {

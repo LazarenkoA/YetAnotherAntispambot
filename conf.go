@@ -20,7 +20,22 @@ type Deepseek struct {
 }
 
 type AIConf struct {
-	deepseek *Deepseek `yaml:"deepseek"`
+	Deepseek *Deepseek `yaml:"deepseek"`
+}
+
+// GitHubConf — конфигурация GitHub API.
+type GitHubConf struct {
+	APIKeys []string `yaml:"apiKeys"`
+}
+
+// Enabled возвращает true, если задан хотя бы один ключ.
+func (c GitHubConf) Enabled() bool {
+	return len(c.APIKeys) > 0
+}
+
+// AIEnabled возвращает true, если ИИ включен в конфиге (задан deepseek и хотя бы один ключ)
+func (c AIConf) AIEnabled() bool {
+	return c.Deepseek != nil && len(c.Deepseek.APIKeys) > 0
 }
 
 type Conf struct {
@@ -34,7 +49,8 @@ type Conf struct {
 	BlockMembers struct {
 		UserNameRegExp string `yaml:"userNameRegExp"`
 	} `yaml:"blockMembers"`
-	AI AIConf `yaml:"ai"`
+	AI     AIConf     `yaml:"ai"`
+	GitHub GitHubConf `yaml:"github"`
 }
 
 func LoadConfFromFile(confpath string) (result *Conf, err error) {
@@ -71,12 +87,21 @@ countVoted: 10 # количество проголосовавщих за бан
 blockMembers: # не обязательная настройка, можно задать регулярное выражение по которому будет баниться никнейм или ФИО. Бан будет сразу при вступлении, без вопроса
   userNameRegExp: "(?i).*([ПPР][OО0][PРR][NHН][OО0]).*|.*([ПPР][NHН][PРR][NHН][OО0]).*" # проверка будет выполняться по полям UserName, FirstName, LastName
 
-# если настройка задана антиспам будет анализировать первое отправвленое сообщение от пользователя на предмет спам - не спам  
-# поддерживается deepseek, gigachat. Если заданы обе настройки, API вызывааться будут в порядке заданном в конфиге. Если первый АПИ вернул ошибку последует запрос в следующий
+# если настройка задана антиспам будет анализировать первое отправленное сообщение от пользователя на предмет спам - не спам,
+# а так же токсичность сообщений (по каждому пользователю считается % токсичных сообщений)
+# Если все ключи вернули ошибку (например, закончились деньги на счету API), анализ просто не выполняется
+# и статистика токсичности не искажается
 ai:
-  - name: deepseek # будет использован первый
-    apiKey: <ключ можно получить https://platform.deepseek.com/api_keys>
-  - name: gigachat # будет использован вторым если первый вернул ошибку
-    apiKey: <ключ можно получить https://developers.sber.ru>
+  deepseek:
+    apiKeys: # ключи можно получить https://platform.deepseek.com/api_keys
+      - sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# не обязательная настройка: ключи GitHub API (https://github.com/settings/tokens).
+# Если задано несколько, они используются равномерно (round-robin), каждый следующий
+# запрос идёт с очередным ключом — так квоты складываются
+github:
+  apiKeys:
+    - ghp_xxx...xxxx
+    - ghp_yyy...yyyy
 `
 }
